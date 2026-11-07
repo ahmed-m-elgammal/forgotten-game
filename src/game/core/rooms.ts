@@ -87,8 +87,8 @@ export const ROOMS: RoomDef[] = [
       'bottles hold ink. press C and drag — a drawn line holds for a while.',
     ],
     inkDrops: [
-      { x: 300, y: 525 }, // easy, on the first floor
-      { x: 225, y: 280 }, // on the bonus ledge — rewards a drawn plank
+      { x: 300, y: 525 }, // easy, on the first floor — ordinary black
+      { x: 225, y: 280, color: 'red' }, // on the bonus ledge — red ink, springs
     ],
   },
 
@@ -123,7 +123,7 @@ export const ROOMS: RoomDef[] = [
       'Here, left and right can forget themselves.',
       'Watch the edges. The page will tell you.',
     ],
-    inkDrops: [{ x: 455, y: 305 }], // high on r3-l3 — a small detour reward
+    inkDrops: [{ x: 455, y: 305, color: 'blue' }], // high on r3-l3 — small detour reward
   },
 
   // ------------------------------------------------------------
@@ -161,12 +161,57 @@ export const ROOMS: RoomDef[] = [
   },
 
   // ------------------------------------------------------------
-  // ROOM 5 — THE WATCHER. All six physical rules; habit bias fully
+  // ROOM 5 — IMITATION. The observer's new trick on display: the
+  // page comes with a plank that is NOT yours — graphite, slightly
+  // wrong (16px proud of the floor, shifted off the ideal line),
+  // and gone in ~26s. It redraws it after a respawn. The room also
+  // teaches the two new inks: red springs, blue tears. The high
+  // bonus ledge (145px up) is beyond jump reach — you MUST draw or
+  // bounce your way up; a red drop waits up there as the reward.
+  // ------------------------------------------------------------
+  {
+    index: 4,
+    name: 'Imitation',
+    subtitle: 'someone has been drawing in your notebook',
+    spawn: { x: 60, y: 510 },
+    platforms: [
+      { id: 'rI-f1', x: 0, y: 540, w: 300, h: 60, kind: 'floor' },
+      { id: 'rI-f2', x: 470, y: 540, w: 230, h: 60, kind: 'floor' }, // gap 170 — stranger plank spans it
+      { id: 'rI-f3', x: 800, y: 540, w: 160, h: 60, kind: 'floor' }, // gap 100
+      { id: 'rI-l1', x: 150, y: 465, w: 110, h: 16, kind: 'ledge' }, // 75 up
+      { id: 'rI-l2', x: 340, y: 390, w: 110, h: 16, kind: 'ledge' }, // 75 up, 80 gap
+      { id: 'rI-l3', x: 560, y: 460, w: 110, h: 16, kind: 'ledge' }, // 80 up from f2
+      { id: 'rI-bx', x: 640, y: 315, w: 110, h: 16, kind: 'ledge' }, // 145 up — draw/bounce only
+    ],
+    exit: { x: 870, y: 470, w: 60, h: 70 }, // sits on rI-f3 (800..960)
+    checkpoint: { x: 520, y: 540 },
+    activeRules: ['gravity', 'jump', 'collision', 'platforms'],
+    memorySlots: 2,
+    maxCharges: 3,
+    firstEventDelay: 10,
+    eventInterval: [10, 15],
+    warnDuration: 3,
+    introNotes: [
+      'the margins have a new handwriting.',
+      'red ink springs. blue ink tears. draw like you mean it.',
+      'someone has been here before you.',
+    ],
+    inkDrops: [
+      { x: 205, y: 450, color: 'red' }, // on rI-l1
+      { x: 390, y: 375, color: 'blue' }, // on rI-l2
+      { x: 690, y: 445 }, // ordinary black on rI-l3
+      { x: 695, y: 300, color: 'red' }, // the bonus-ledge reward
+    ],
+    strangerPlank: { x: 318, y: 524, w: 130 }, // 16px proud of the floor — slightly wrong
+  },
+
+  // ------------------------------------------------------------
+  // ROOM 6 — THE WATCHER. All six physical rules; habit bias fully
   // on; the page admits it has been reading over your shoulder.
   // Ink drops sit on both route branches.
   // ------------------------------------------------------------
   {
-    index: 4,
+    index: 5,
     name: 'The Watcher',
     subtitle: 'the margins have handwriting in them now',
     spawn: { x: 60, y: 510 },
@@ -192,13 +237,13 @@ export const ROOMS: RoomDef[] = [
       'It learns what you keep. It forgets that, first.',
     ],
     inkDrops: [
-      { x: 235, y: 445 }, // on r5-l1 (left branch)
-      { x: 820, y: 345 }, // on r5-l4 (right branch)
+      { x: 235, y: 445, color: 'red' }, // on r5-l1 (left branch)
+      { x: 820, y: 345, color: 'blue' }, // on r5-l4 (right branch)
     ],
   },
 
   // ------------------------------------------------------------
-  // ROOM 6 — THE NAMING. Built around the door: it stands on its
+  // ROOM 7 — THE NAMING. Built around the door: it stands on its
   // own high ledge, and when the name is forgotten the OUT? label
   // drifts between three anchors computed from the exit rect —
   // one off the ledge's left edge (a deliberate jump), one at the
@@ -208,7 +253,7 @@ export const ROOMS: RoomDef[] = [
   // the label rescue is always optional — never a softlock.
   // ------------------------------------------------------------
   {
-    index: 5,
+    index: 6,
     name: 'The Naming',
     subtitle: 'a door is only a word',
     spawn: { x: 60, y: 510 },
@@ -235,13 +280,13 @@ export const ROOMS: RoomDef[] = [
       'touch the wandering word to give it back.',
     ],
     inkDrops: [
-      { x: 110, y: 525 }, // easy, near spawn
-      { x: 615, y: 445 }, // on r6-m1, mid-climb
+      { x: 110, y: 525 }, // easy, near spawn — ordinary black
+      { x: 615, y: 445, color: 'blue' }, // on r6-m1, mid-climb — crosses fast or tears
     ],
   },
 
   // ------------------------------------------------------------
-  // ROOM 7 — the final climb, extended. Near the top a scripted
+  // ROOM 8 — the final climb, extended. Near the top a scripted
   // sequence warns THREE rules in quick succession — including
   // the grip and the naming (sequential, still fully telegraphed).
   // The exit rides a protected platform (noDistort) so the set
@@ -249,7 +294,7 @@ export const ROOMS: RoomDef[] = [
   // the left hides one of the two ink drops.
   // ------------------------------------------------------------
   {
-    index: 6,
+    index: 7,
     name: 'What You Kept',
     subtitle: 'the last page writes back',
     spawn: { x: 60, y: 510 },
@@ -279,8 +324,8 @@ export const ROOMS: RoomDef[] = [
       'Keep what matters. Let the rest blur.',
     ],
     inkDrops: [
-      { x: 70, y: 375 }, // hidden on the bonus branch r7-lx
-      { x: 520, y: 295 }, // on r7-p3, deep in the climb
+      { x: 70, y: 375, color: 'blue' }, // hidden on the bonus branch r7-lx
+      { x: 520, y: 295, color: 'red' }, // on r7-p3, deep in the climb
     ],
     script: {
       whenX: 430, // deep in the upper climb

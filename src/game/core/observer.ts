@@ -66,6 +66,9 @@ export class Observer {
   private standAll = new Map<string, { kind: 'floor' | 'ledge'; t: number }>()
   private standRoom = new Map<string, number>()
   private roomNoteCount = new Map<string, number>()
+  /** cumulative seconds the player has ridden each drawn plank
+   *  (v1.1) — the raw material for "it uncircles your plank." */
+  private plankRides = new Map<string, number>()
 
   private habitRule: RuleId | null = null
   private lastHabitNoteAt = -999
@@ -88,6 +91,29 @@ export class Observer {
     e.t += dt
     this.standAll.set(id, e)
     this.standRoom.set(id, (this.standRoom.get(id) ?? 0) + dt)
+  }
+
+  /** the player stood on a drawn plank (v1.1) */
+  onPlankRide(id: string, dt: number): void {
+    this.plankRides.set(id, (this.plankRides.get(id) ?? 0) + dt)
+  }
+
+  /** how long the player has ridden this plank in total */
+  plankRide(id: string): number {
+    return this.plankRides.get(id) ?? 0
+  }
+
+  /** the most-ridden plank id, or null (used to pick the uncircle target) */
+  mostRiddenPlank(minRide: number): string | null {
+    let best: string | null = null
+    let bestT = minRide
+    this.plankRides.forEach((t, id) => {
+      if (t > bestT) {
+        bestT = t
+        best = id
+      }
+    })
+    return best
   }
 
   /** per-room counters reset when a page opens */
@@ -223,15 +249,31 @@ export class Observer {
     return top && n > 0 ? { rule: top, count: n } : null
   }
 
-  getEnding(): EndingInfo {
+  /** the personalized ending, plus (v1.1) a coda about HOW you
+   *  played: did you write the page back, or only hold it shut? */
+  getEnding(style: { drawn: number; pins: number }): EndingInfo {
     const top = this.topKept()
     // fallback: pins were rare and the run was all motion
     if (!top || (top.count <= 1 && this.totalJumps >= 80)) {
-      return RESTLESS_ENDING
+      return { ...RESTLESS_ENDING, coda: this.coda(style) }
     }
     return {
       heading: `WHAT YOU KEPT: ${RULES[top.rule].name}`,
       line: RULE_ENDINGS[top.rule],
+      coda: this.coda(style),
     }
+  }
+
+  private coda(s: { drawn: number; pins: number }): string | undefined {
+    if (s.drawn >= 6) {
+      return 'You wrote back. The margins will keep your handwriting long after the pages stop turning.'
+    }
+    if (s.drawn >= 1 && s.pins >= 8) {
+      return 'You held on with one hand and drew with the other. The notebook noticed both.'
+    }
+    if (s.drawn === 0) {
+      return 'You never drew a single line — you only held on. The notebook respects that, in its way.'
+    }
+    return undefined
   }
 }

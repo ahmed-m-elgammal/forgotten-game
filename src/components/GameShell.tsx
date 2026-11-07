@@ -28,7 +28,7 @@ const INITIAL_UI: UiSnapshot = {
   version: 0,
   status: 'title',
   roomIndex: 0,
-  roomCount: 7,
+  roomCount: 8,
   roomName: '',
   roomSubtitle: '',
   charges: 0,
@@ -235,6 +235,11 @@ export default function GameShell() {
             <p style={HAND} className="mx-auto mt-4 max-w-xl text-lg leading-relaxed sm:text-xl">
               “{ui.ending.line}”
             </p>
+            {ui.ending.coda && (
+              <p style={HAND} className="mx-auto mt-3 max-w-lg text-sm italic leading-relaxed opacity-70">
+                {ui.ending.coda}
+              </p>
+            )}
 
             {ui.stats && (
               <div className="mx-auto mt-6 grid max-w-md grid-cols-2 gap-3 text-left text-sm sm:grid-cols-3">
@@ -243,6 +248,12 @@ export default function GameShell() {
                 <Stat label="jumps" value={`${ui.stats.jumps}`} />
                 {ui.stats.planksDrawn > 0 && (
                   <Stat label="lines drawn" value={`${ui.stats.planksDrawn}`} />
+                )}
+                {ui.stats.redBounces > 0 && (
+                  <Stat label="red springs" value={`${ui.stats.redBounces}`} dot="#c23a2b" />
+                )}
+                {ui.stats.blueTears > 0 && (
+                  <Stat label="planks torn" value={`${ui.stats.blueTears}`} dot="#39628f" />
                 )}
                 {ui.stats.topKept && (
                   <Stat
@@ -336,18 +347,35 @@ export default function GameShell() {
             <ul className="mt-2 space-y-1 text-sm">
               <li>
                 <b>ink bottles</b> refill your pen — three swallows max, gone when the page
-                reloads.
+                reloads. Bottles come in three inks; your next stroke spends the OLDEST
+                swallow in the pen.
+              </li>
+              <li>
+                <b>black ink</b> draws an ordinary plank.
+              </li>
+              <li>
+                <b className="text-[#c23a2b]">red ink</b> springs — fall onto it and it throws
+                you back up. Bridges gaps without touching the ground.
+              </li>
+              <li>
+                <b className="text-[#39628f]">blue ink</b> is brittle — it tears after about
+                two seconds of standing on it. Keep moving.
               </li>
               <li>
                 <b>draw a plank:</b> hold left-click and drag a line — or press C, aim the ghost
                 with A/D/W/S, ENTER places it.
               </li>
               <li>
-                <b>planks dry out</b> in about 8 seconds, then fade. Three can exist at once.
+                <b>planks dry out</b> in about 8 seconds, then fade. Three of yours can exist at
+                once.
               </li>
               <li>
                 <b>THE NAMING:</b> a nameless door won&apos;t open — touch its wandering word to
                 re-ink it.
+              </li>
+              <li>
+                <b>it writes back:</b> lean on one plank too long and the margins will circle it
+                in pencil. It dries faster after that.
               </li>
             </ul>
             <p className="mt-4 text-xs opacity-60">

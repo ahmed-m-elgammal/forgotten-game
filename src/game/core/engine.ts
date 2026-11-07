@@ -17,6 +17,7 @@ import type {
   EndingInfo,
   EngineLike,
   GameStatus,
+  InkColor,
   NoteRT,
   PlankRT,
   PlatformRT,
@@ -31,6 +32,7 @@ import type {
   Vec,
 } from './types'
 import {
+  BRITTLE_LIFE,
   CHARGE_REGEN,
   COYOTE,
   GRAVITY,
@@ -38,6 +40,7 @@ import {
   GRIP_DRAG,
   GRIP_TOP_SPEED,
   GHOST_PLANK_W,
+  INK_COLORS,
   INK_MAX,
   JUMP_BUFFER,
   JUMP_V,
@@ -51,15 +54,23 @@ import {
   PLANK_MIN_W,
   PLAYER_H,
   PLAYER_W,
+  RED_BOUNCE_MIN,
+  RED_BOUNCE_VY,
   SKETCH_MAX_PLANKS,
+  SQUASH_TIME,
+  STRANGER_LIFE,
   TOKEN_R,
+  UNCIRCLE_COOLDOWN,
+  UNCIRCLE_CUT,
+  UNCIRCLE_MAX_PER_ROOM,
+  UNCIRCLE_RIDE,
   VIEW_H,
   VIEW_W,
 } from './types'
 import { RULES, applyDistortion, undoDistortion } from './rules'
 import { ROOMS } from './rooms'
 import { Observer } from './observer'
-import { INK, reducedMotion } from '../render/paper'
+import { GRAPHITE, INK, reducedMotion } from '../render/paper'
 import type { AudioEngine } from '../audio/synth'
 
 /** live held-key state, owned by the InputManager via the shell */
@@ -154,15 +165,24 @@ export class GameEngine implements EngineLike {
   private labelDriftT0 = 0
 
   // ---- RE-INKING: ink, drops, sketched planks, sketch mode ----------
-  ink = 0
-  inkDrops: Array<{ at: Vec; taken: boolean }> = []
+  /** carried ink as a FIFO of colored swallows — the oldest is what
+   *  the next stroke spends. `ink` stays the count for the HUD. */
+  inkCharges: InkColor[] = []
+  // the renderer draws the bottles, so this stays readable outside
+  inkDrops: Array<{ at: Vec; taken: boolean; color: InkColor }> = []
   planks: PlankRT[] = []
   private plankSeq = 0
+  /** paper shreds where a blue plank tore (read by the renderer) */
+  tears: Array<{ x: number; y: number; t: number; seed: number }> = []
   sketchMode = false
   sketchOffset: Vec = { x: 40, y: 0 } // ghost plank offset from the player
   drag: { active: boolean; x0: number; y0: number; x1: number; y1: number } | null = null
   skids: Array<{ x: number; y: number; t: number }> = [] // icy slide streaks
   private skidClock = 0
+  // the Observer writes back: per-room uncircle bookkeeping
+  private uncircleRoomCount = 0
+  private lastUncircleAt = -999
+  private strangerFarewellDone = false
 
   // ---- scheduling ----------------------------------------------------
   nextEventAt = 0
@@ -184,6 +204,8 @@ export class GameEngine implements EngineLike {
     totalPins: 0,
     planksDrawn: 0,
     inkCollected: 0,
+    redBounces: 0,
+    blueTears: 0,
   }
 
   private held: HeldInput
@@ -197,6 +219,11 @@ export class GameEngine implements EngineLike {
     this.bigNote = null
     this.introQueue = []
     this.status = 'title'
+  }
+
+  /** carried ink count (queue length) — the HUD and deny checks read this */
+  get ink(): number {
+    return this.inkCharges.length
   }
 
   // ================================================================
@@ -219,6 +246,8 @@ export class GameEngine implements EngineLike {
             topKept: top,
             planksDrawn: this.stats.planksDrawn,
             inkCollected: this.stats.inkCollected,
+            redBounces: this.stats.redBounces,
+            blueTears: this.stats.blueTears,
           }
         : null
     return {
@@ -272,6 +301,8 @@ export class GameEngine implements EngineLike {
       totalPins: 0,
       planksDrawn: 0,
       inkCollected: 0,
+      redBounces: 0,
+      blueTears: 0,
     }
     this.ending = null
     this.legendOpen = false
@@ -771,10 +802,26 @@ export class GameEngine implements EngineLike {
         p.landTimer = 0.08
       }
     }
-    // stand-time for the Observer's perch detection
-    if (p.grounded && p.groundId) {
-      const g = this.platformById(p.groundId)
+    // stand-time for the Observer's perch detection — and for drawn
+    // planks: ride tracking (it uncircles what you rely on) plus the
+    // blue ink's brittleness (it tears under a standing load).
+    // (locals defeat TS's stale literal-narrowing from above —
+    // resolveY() set these, the checker just can't see it)
+    const standing = p.grounded as boolean
+    const gid = p.groundId as string | null
+    if (standing && gid) {
+      const g = this.platformById(gid)
       if (g) this.observer.addStand(g.id, g.kind, dt)
+      if (gid.startsWith('plank-')) {
+        const pl = this.planks.find((q) => q.id === gid)
+        if (pl) {
+          this.observer.onPlankRide(pl.id, dt)
+          if (pl.color === 'blue' && !pl.stranger) {
+            pl.contact += dt
+            if (pl.contact >= BRITTLE_LIFE) this.tearPlank(pl)
+          }
+        }
+      }
     }
     // soft ceiling: floaty jumps may poke above the page
     if (p.y < -40) {
@@ -812,10 +859,61 @@ export class GameEngine implements EngineLike {
   private updatePlanks(): void {
     const alive: PlankRT[] = []
     for (const pl of this.planks) {
-      if (this.time - pl.born < pl.life) alive.push(pl)
-      else this.audio.plankFade() // soft pencil-sweep, no note — too chatty
+      if (pl.squash > 0) pl.squash = Math.max(0, pl.squash - (1 / SQUASH_TIME) * 0.016)
+      if (this.time - pl.born < pl.life) {
+        alive.push(pl)
+      } else {
+        this.audio.plankFade() // soft pencil-sweep, no note — too chatty
+        if (pl.stranger && !this.strangerFarewellDone) {
+          // the imitation finally dried up — say so, once
+          this.strangerFarewellDone = true
+          this.pushNote('it was never your line.', GRAPHITE, 4.5, true)
+        }
+      }
     }
     this.planks = alive
+    this.tears = this.tears.filter((s) => this.time - s.t < 0.5)
+    this.observerUncircle()
+  }
+
+  /** THE OBSERVER WRITES BACK: if you have ridden one of your planks
+   *  long enough, it circles that plank in graphite and strikes it —
+   *  the remaining life is cut. Never the stranger's line, never more
+   *  than twice a page, always ≥8s apart. Telegraphed by the scribble
+   *  itself + a shaky note + the scratch sound; the plank still blinks
+   *  before it goes, so nothing is ever instant. */
+  private observerUncircle(): void {
+    if (this.uncircleRoomCount >= UNCIRCLE_MAX_PER_ROOM) return
+    if (this.time - this.lastUncircleAt < UNCIRCLE_COOLDOWN) return
+    const id = this.observer.mostRiddenPlank(UNCIRCLE_RIDE)
+    if (!id) return
+    const pl = this.planks.find((q) => q.id === id && !q.stranger && !q.uncircled)
+    if (!pl) return
+    const age = this.time - pl.born
+    const remaining = pl.life - age
+    if (remaining <= 0.8) return // about to dry anyway — pointless cruelty
+    pl.life = age + remaining * UNCIRCLE_CUT
+    pl.uncircled = true
+    this.uncircleRoomCount++
+    this.lastUncircleAt = this.time
+    this.pushNote('it uncircles your plank.', GRAPHITE, 4.5, true)
+    this.audio.observerScratch()
+  }
+
+  /** a blue plank gives way: shreds, crunch, and open air */
+  private tearPlank(pl: PlankRT): void {
+    this.planks = this.planks.filter((q) => q.id !== pl.id)
+    this.stats.blueTears++
+    for (let i = 0; i < 5; i++) {
+      this.tears.push({
+        x: pl.x + pl.w * (0.15 + 0.7 * Math.random()),
+        y: pl.y + Math.random() * pl.h,
+        t: this.time,
+        seed: Math.random() * 1000,
+      })
+    }
+    this.audio.plankTear()
+    this.bumpUi()
   }
 
   /** the keyboard ghost plank, anchored to the player (clamped in-page) */
@@ -853,7 +951,7 @@ export class GameEngine implements EngineLike {
   }
 
   private placeSketchKeyboard(): void {
-    if (this.ink <= 0) {
+    if (this.inkCharges.length === 0) {
       this.pushNote('no ink to draw with.', '#a2611c')
       this.audio.pinDenied()
       this.exitSketch()
@@ -869,7 +967,7 @@ export class GameEngine implements EngineLike {
     if (this.sketchMode) this.exitSketch() // the mouse takes over
     this.drag = { active: true, x0: x, y0: y, x1: x, y1: y }
     this.audio.sketchStart()
-    if (this.ink > 0) this.audio.startSketchLoop()
+    if (this.inkCharges.length > 0) this.audio.startSketchLoop()
   }
 
   private sketchDragMove(x: number, y: number): void {
@@ -885,7 +983,7 @@ export class GameEngine implements EngineLike {
     if (!d || this.status !== 'playing') return
     const len = Math.hypot(x - d.x0, y - d.y0)
     if (len < PLANK_DRAG_MIN) return // a short click — nothing drawn
-    if (this.ink <= 0) {
+    if (this.inkCharges.length === 0) {
       this.pushNote('no ink to draw with.', '#a2611c')
       this.audio.pinDenied()
       return
@@ -915,9 +1013,10 @@ export class GameEngine implements EngineLike {
     return { x, y, w, h: PLANK_H }
   }
 
-  private createPlank(x: number, y: number, w: number): void {
-    this.ink--
-    this.stats.planksDrawn++
+  /** spend the OLDEST swallow in the queue and draw with its color */
+  private createPlank(x: number, y: number, w: number, opts?: { stranger?: boolean }): void {
+    const color: InkColor = opts?.stranger ? 'black' : (this.inkCharges.shift() ?? 'black')
+    if (!opts?.stranger) this.stats.planksDrawn++
     this.planks.push({
       id: `plank-${++this.plankSeq}`,
       x,
@@ -925,11 +1024,19 @@ export class GameEngine implements EngineLike {
       w,
       h: PLANK_H,
       born: this.time,
-      life: PLANK_LIFE,
+      life: opts?.stranger ? STRANGER_LIFE : PLANK_LIFE,
+      color,
+      contact: 0,
+      squash: 0,
+      uncircled: false,
+      stranger: !!opts?.stranger,
     })
-    // soft cap: the 4th plank erases the oldest early
-    if (this.planks.length > SKETCH_MAX_PLANKS) {
-      this.planks.shift()
+    // soft cap: the 4th plank of YOURS erases your oldest early
+    // (the stranger's line is never counted or spent this way)
+    const mine = this.planks.filter((p) => !p.stranger)
+    if (mine.length > SKETCH_MAX_PLANKS) {
+      const oldest = mine[0]
+      this.planks = this.planks.filter((p) => p.id !== oldest.id)
       this.audio.plankFade()
     }
     this.bumpUi()
@@ -1015,8 +1122,9 @@ export class GameEngine implements EngineLike {
       if (!pl.solid) continue
       this.landOn(p, pl)
     }
-    // sketched planks are always solid (never targeted by distortions)
-    for (const pl of this.planks) this.landOn(p, pl)
+    // sketched planks are always solid (never targeted by distortions);
+    // red ink turns a real landing into a spring
+    for (const pl of this.planks) this.landOnPlank(p, pl)
   }
 
   private landOn(
@@ -1041,6 +1149,33 @@ export class GameEngine implements EngineLike {
     }
   }
 
+  /** planks land like platforms EXCEPT red ink: a real fall (impact
+   *  above RED_BOUNCE_MIN) rebounds at RED_BOUNCE_VY instead of
+   *  grounding — momentum is kept, so red planks bridge gaps. Light
+   *  taps still land, so you can stand on red to draw from it. */
+  private landOnPlank(p: PlayerRT, pl: PlankRT): void {
+    if (
+      p.x < pl.x + pl.w &&
+      p.x + p.w > pl.x &&
+      p.y < pl.y + pl.h &&
+      p.y + p.h > pl.y &&
+      p.vy > 0 &&
+      pl.color === 'red' &&
+      p.prevVy >= RED_BOUNCE_MIN
+    ) {
+      p.y = pl.y - p.h
+      p.vy = -RED_BOUNCE_VY
+      p.grounded = false
+      p.groundId = null
+      p.coyote = 0
+      pl.squash = 1
+      this.stats.redBounces++
+      this.audio.plankBounce()
+      return
+    }
+    this.landOn(p, pl)
+  }
+
   // ---- interactions ---------------------------------------------------
   private checkInteractions(): void {
     const p = this.player
@@ -1060,17 +1195,18 @@ export class GameEngine implements EngineLike {
       this.pushNote('anchored.', '#a2611c')
     }
 
-    // ink bottles (RE-INKING): +1 carried ink, until the page reloads
+    // ink bottles (RE-INKING): +1 carried ink of the bottle's color,
+    // until the page reloads. Full pen? the bottle waits.
     const pcx = p.x + p.w / 2
     const pcy = p.y + p.h / 2
     for (const d of this.inkDrops) {
       if (d.taken) continue
-      if (this.ink >= INK_MAX) break // bottles wait until you have room
+      if (this.inkCharges.length >= INK_MAX) break // bottles wait until you have room
       if (Math.hypot(pcx - d.at.x, pcy - d.at.y) < 30) {
         d.taken = true
-        this.ink++
+        this.inkCharges.push(d.color)
         this.stats.inkCollected++
-        this.pushNote('+1 ink.', '#a2611c')
+        this.pushNote(`+1 ${INK_COLORS[d.color].label}`, INK_COLORS[d.color].line)
         this.audio.inkPickup()
         this.bumpUi()
       }
@@ -1161,6 +1297,11 @@ export class GameEngine implements EngineLike {
       this.nextEventAt,
       this.time + RESPAWN_GRACE + Math.random() * 4,
     )
+    // the stranger redraws their line if it dried while you were gone
+    if (this.roomDef.strangerPlank && !this.planks.some((q) => q.stranger)) {
+      const sp = this.roomDef.strangerPlank
+      this.createPlank(sp.x, sp.y, sp.w, { stranger: true })
+    }
     this.status = 'playing'
     this.shake(2, 0.18)
     this.bumpUi()
@@ -1188,7 +1329,10 @@ export class GameEngine implements EngineLike {
       this.bumpUi()
     } else {
       this.status = 'victory'
-      this.ending = this.observer.getEnding()
+      this.ending = this.observer.getEnding({
+        drawn: this.stats.planksDrawn,
+        pins: this.stats.totalPins,
+      })
       this.audio.victory()
       this.bumpUi()
     }
@@ -1249,10 +1393,23 @@ export class GameEngine implements EngineLike {
     this.labelAnchors = []
     this.endLabelDrift()
     // RE-INKING state is page-scoped: a fresh page is blank paper
-    this.ink = 0
-    this.inkDrops = rd.inkDrops.map((at) => ({ at: { ...at }, taken: false }))
+    this.inkCharges = []
+    this.inkDrops = rd.inkDrops.map((d) => ({
+      at: { x: d.x, y: d.y },
+      taken: false,
+      color: d.color ?? 'black',
+    }))
+    this.tears = []
     this.planks = []
     this.plankSeq = 0
+    this.uncircleRoomCount = 0
+    this.lastUncircleAt = -999
+    this.strangerFarewellDone = false
+    // the stranger's line, if this page has one — slightly wrong, on purpose
+    if (rd.strangerPlank) {
+      const sp = rd.strangerPlank
+      this.createPlank(sp.x, sp.y, sp.w, { stranger: true })
+    }
     this.sketchMode = false
     this.sketchOffset = { x: 40, y: 0 }
     this.drag = null
@@ -1278,14 +1435,15 @@ export class GameEngine implements EngineLike {
     }
   }
 
-  private pushNote(text: string, color?: string, dur = 4.2): void {
+  private pushNote(text: string, color?: string, dur = 4.2, shaky = false): void {
     this.notes.push({
       id: this.noteId++,
       text,
       color: color ?? INK,
-      rot: (Math.random() * 2 - 1) * 0.03,
+      rot: (Math.random() * 2 - 1) * (shaky ? 0.055 : 0.03),
       t: 0,
       dur,
+      shaky,
     })
     if (this.notes.length > 3) this.notes.shift()
   }
@@ -1330,8 +1488,11 @@ export class GameEngine implements EngineLike {
     this.startWarning(id)
   }
 
-  /** Top up carried ink (defaults to full). */
-  debugGrantInk(n: number = INK_MAX): void {
-    this.ink = Math.max(0, Math.min(INK_MAX, n))
+  /** Top up carried ink (defaults to a full black queue). A color
+   *  argument fills with that ink — handy for testing red/blue. */
+  debugGrantInk(n: number = INK_MAX, color: InkColor = 'black'): void {
+    const k = Math.max(0, Math.min(INK_MAX, n))
+    this.inkCharges = Array.from({ length: k }, () => color)
+    this.bumpUi()
   }
 }

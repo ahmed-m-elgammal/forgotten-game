@@ -12,6 +12,8 @@ export const INK = '#2b2620'
 export const PAPER = '#f5ecd9'
 export const PAPER_DARK = '#e7d9b8'
 export const AMBER = '#d99a2b' // the color of "about to be forgotten"
+/** pencil graphite — the Observer's own handwriting (v1.1) */
+export const GRAPHITE = '#6a6178'
 
 export const HAND_FONT =
   '"Comic Sans MS","Segoe Print","Chalkboard SE","Comic Neue",cursive,sans-serif'

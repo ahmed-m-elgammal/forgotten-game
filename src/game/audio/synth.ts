@@ -294,6 +294,28 @@ export class AudioEngine {
     this.hiss({ dur: 0.28, g: 0.14, type: 'bandpass', f: 1200, f1: 260, q: 0.7 })
   }
 
+  /** red ink — landing becomes a spring: quick rubbery up-chirp */
+  plankBounce(): void {
+    this.tone({ f: 210, f1: 540, type: 'triangle', dur: 0.13, g: 0.2 })
+    this.hiss({ dur: 0.05, g: 0.1, type: 'bandpass', f: 1500, q: 1 })
+  }
+
+  /** blue ink — a brittle plank tears underfoot: rip + papery crunch */
+  plankTear(): void {
+    this.hiss({ dur: 0.2, g: 0.42, type: 'bandpass', f: 2200, f1: 380, q: 0.6 })
+    this.tone({ f: 160, f1: 60, type: 'sawtooth', dur: 0.14, g: 0.14, filter: 800 })
+  }
+
+  /** the Observer writes back — two dry graphite scratches, lower
+   *  and quieter than the player's pen (it is not trying to be heard) */
+  observerScratch(): void {
+    if (!this.ok()) return
+    const t = this.ctx as AudioContext
+    const t0 = t.currentTime
+    this.hiss({ at: t0, dur: 0.12, g: 0.13, type: 'bandpass', f: 1150, f1: 850, q: 1.6 })
+    this.hiss({ at: t0 + 0.14, dur: 0.1, g: 0.1, type: 'bandpass', f: 950, f1: 1250, q: 1.6 })
+  }
+
   /** THE NAMING rescue — a quick re-inking scribble burst */
   reInk(): void {
     if (!this.ok()) return

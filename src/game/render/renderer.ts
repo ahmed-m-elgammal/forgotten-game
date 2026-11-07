@@ -8,11 +8,12 @@
 // the single "about to be forgotten" warning color.
 // ============================================================
 import type { GameEngine } from '../core/engine'
-import type { PlatformRT, RuleId } from '../core/types'
-import { INK_MAX, TOKEN_R, VIEW_H, VIEW_W } from '../core/types'
+import type { PlankRT, PlatformRT, RuleId } from '../core/types'
+import { INK_COLORS, INK_MAX, TOKEN_R, VIEW_H, VIEW_W } from '../core/types'
 import { RULES } from '../core/rules'
 import {
   AMBER,
+  GRAPHITE,
   HAND_FONT,
   INK,
   PAPER,
@@ -91,6 +92,7 @@ export class Renderer {
     this.platforms(ctx, eng, warnMap)
     this.inkBottles(ctx, eng)
     this.planks(ctx, eng)
+    this.tearShreds(ctx, eng)
     this.checkpoint(ctx, eng)
     this.trail(ctx, eng)
     this.skids(ctx, eng)
@@ -230,16 +232,17 @@ export class Renderer {
       const bob = reducedMotion() ? 0 : Math.sin(time * 2 + d.at.x * 0.05) * 2
       const x = d.at.x
       const y = d.at.y + bob
-      // soft attention ring
+      const wet = INK_COLORS[d.color].body // the ink this bottle holds
+      // soft attention ring, tinted to match
       ctx.save()
       ctx.globalAlpha = 0.16 + 0.1 * Math.sin(time * 2.4 + d.at.x)
-      ctx.strokeStyle = INK
+      ctx.strokeStyle = d.color === 'black' ? INK : wet
       ctx.lineWidth = 1.6
       ctx.beginPath()
       ctx.arc(x, y, 15, 0, Math.PI * 2)
       ctx.stroke()
       ctx.restore()
-      // little bottle: body, neck, cork, wet ink level
+      // little bottle: body, neck, cork, wet ink level (tinted)
       ctx.save()
       ctx.strokeStyle = INK
       ctx.lineWidth = 1.8
@@ -247,7 +250,7 @@ export class Renderer {
       wobblyLine(ctx, x - 3, y - 3, x - 3, y - 8, 78, time, 0.4)
       wobblyLine(ctx, x + 3, y - 3, x + 3, y - 8, 79, time, 0.4)
       wobblyLine(ctx, x - 4.5, y - 8, x + 4.5, y - 8, 80, time, 0.4)
-      ctx.fillStyle = INK
+      ctx.fillStyle = wet
       wobblyRectPath(ctx, x - 4, y + 2, 8, 5, 81, time, 0.5)
       ctx.fill()
       ctx.restore()
@@ -255,6 +258,10 @@ export class Renderer {
   }
 
   // ---- sketched planks: fresh glossy ink → dries → blinks → fades ------
+  // v1.1: color by ink (black/red/blue), the stranger's line in
+  // graphite with a wobblier hand, red squash on bounce, blue crack
+  // marks as it wears, and the Observer's graphite circle+strike on
+  // planks it has uncircled.
   private planks(ctx: CanvasRenderingContext2D, eng: GameEngine): void {
     const time = eng.time
     for (const pl of eng.planks) {
@@ -262,20 +269,43 @@ export class Renderer {
       const left = pl.life - age
       const dry = Math.max(0, Math.min(1, age / pl.life)) // 0 wet → 1 dry
       const blinking = left < 2
+      const brittleWear = pl.color === 'blue' && !pl.stranger ? pl.contact / 2.2 : 0
+      const identity = pl.stranger
+        ? { body: '#585064', line: GRAPHITE }
+        : { body: INK_COLORS[pl.color].body, line: INK_COLORS[pl.color].line }
       ctx.save()
+      // red squash-and-stretch around the plank's center
+      if (pl.squash > 0) {
+        const s = pl.squash
+        const cx = pl.x + pl.w / 2
+        const cy = pl.y + pl.h / 2
+        ctx.translate(cx, cy)
+        ctx.scale(1 + 0.35 * s, 1 - 0.55 * s)
+        ctx.translate(-cx, -cy)
+      }
       ctx.globalAlpha = blinking ? 0.55 + 0.45 * Math.sin(time * 12) : 1
       // wet ink body — lightens as it dries
-      ctx.fillStyle = '#1c1813'
+      ctx.fillStyle = identity.body
       ctx.globalAlpha *= 1 - dry * 0.5
-      wobblyRectPath(ctx, pl.x, pl.y, pl.w, pl.h, 4, time, 1)
+      wobblyRectPath(ctx, pl.x, pl.y, pl.w, pl.h, 4, time, pl.stranger ? 1.6 : 1)
       ctx.fill()
       // hand-drawn double line along the top edge (the "drawn" look)
       ctx.globalAlpha = blinking ? 0.55 + 0.45 * Math.sin(time * 12) : 1
-      ctx.strokeStyle = INK
+      ctx.strokeStyle = identity.line
       ctx.lineWidth = 2
-      wobblyLine(ctx, pl.x + 2, pl.y + 3.5, pl.x + pl.w - 2, pl.y + 3, 45, time, 0.9)
+      wobblyLine(ctx, pl.x + 2, pl.y + 3.5, pl.x + pl.w - 2, pl.y + 3, 45, time, pl.stranger ? 1.5 : 0.9)
       ctx.lineWidth = 1.2
-      wobblyLine(ctx, pl.x + 2, pl.y + 8.5, pl.x + pl.w - 2, pl.y + 9, 46, time, 0.9)
+      wobblyLine(ctx, pl.x + 2, pl.y + 8.5, pl.x + pl.w - 2, pl.y + 9, 46, time, pl.stranger ? 1.5 : 0.9)
+      // blue wear: little crack strokes as it approaches the tear
+      if (brittleWear > 0.35) {
+        ctx.strokeStyle = 'rgba(20,30,45,0.75)'
+        ctx.lineWidth = 1.2
+        const nCracks = brittleWear > 0.7 ? 3 : 2
+        for (let i = 0; i < nCracks; i++) {
+          const cxp = pl.x + pl.w * (0.2 + 0.3 * i) + jit(300 + i, time, 3)
+          wobblyLine(ctx, cxp, pl.y + 1, cxp + 5, pl.y + pl.h - 1, 310 + i, time, 0.8)
+        }
+      }
       // final 2s: dashed outline says "about to go"
       if (blinking) {
         ctx.setLineDash([5, 4])
@@ -283,6 +313,49 @@ export class Renderer {
         ctx.strokeStyle = 'rgba(43,38,32,0.6)'
         ctx.strokeRect(pl.x - 2, pl.y - 2, pl.w + 4, pl.h + 4)
         ctx.setLineDash([])
+      }
+      ctx.restore()
+      // the Observer's mark: a graphite circle struck through, drawn
+      // OUTSIDE the squash transform so it reads as added ON TOP
+      if (pl.uncircled) {
+        ctx.save()
+        ctx.strokeStyle = GRAPHITE
+        ctx.globalAlpha = 0.75 + 0.1 * Math.sin(time * 3)
+        ctx.lineWidth = 1.6
+        const cx = pl.x + pl.w / 2
+        const cy = pl.y + pl.h / 2
+        const rx = pl.w / 2 + 9
+        ctx.beginPath()
+        for (let a = 0; a <= Math.PI * 2.05; a += Math.PI / 9) {
+          const px = cx + Math.cos(a) * rx + jit(410, time, 2.2)
+          const py = cy + Math.sin(a) * 13 + jit(411, time, 2.2)
+          if (a === 0) ctx.moveTo(px, py)
+          else ctx.lineTo(px, py)
+        }
+        ctx.stroke()
+        wobblyLine(ctx, cx - rx - 4, cy + 10, cx + rx + 2, cy - 12, 412, time, 1.2)
+        ctx.restore()
+      }
+    }
+  }
+
+  /** paper shreds where a blue plank tore (0.5s of flutter) */
+  private tearShreds(ctx: CanvasRenderingContext2D, eng: GameEngine): void {
+    const time = eng.time
+    for (const s of eng.tears) {
+      const age = (time - s.t) / 0.5
+      if (age < 0 || age > 1) continue
+      ctx.save()
+      ctx.globalAlpha = 0.85 * (1 - age)
+      ctx.fillStyle = '#39628f'
+      ctx.strokeStyle = '#2d4f75'
+      ctx.lineWidth = 0.8
+      for (let i = 0; i < 3; i++) {
+        const dx = (sRand(s.seed + i) - 0.5) * 26 * age + jit(s.seed + i, time, 1.5)
+        const dy = -6 * age + 22 * age * age + i * 2.2
+        ctx.translate(0, 0)
+        ctx.fillRect(s.x + dx, s.y + dy, 3.2, 2.2)
+        ctx.strokeRect(s.x + dx, s.y + dy, 3.2, 2.2)
       }
       ctx.restore()
     }
@@ -531,14 +604,17 @@ export class Renderer {
     const time = eng.time
     if (eng.drag) {
       const d = eng.drag
+      // the stroke is drawn in the ink it will spend (oldest swallow)
+      const nextInk = eng.inkCharges[0] ?? 'black'
+      const inkCol = nextInk === 'black' ? INK : INK_COLORS[nextInk].body
       ctx.save()
       // the live stroke
-      ctx.strokeStyle = INK
+      ctx.strokeStyle = inkCol
       ctx.lineWidth = 2.6
       ctx.lineCap = 'round'
       ctx.globalAlpha = 0.75
       wobblyLine(ctx, d.x0, d.y0, d.x1, d.y1, 171, time, 1)
-      ctx.fillStyle = INK
+      ctx.fillStyle = inkCol
       ctx.beginPath()
       ctx.arc(d.x0, d.y0, 2.4, 0, Math.PI * 2)
       ctx.fill()
@@ -550,7 +626,7 @@ export class Renderer {
       ctx.setLineDash([5, 4])
       ctx.lineWidth = 1.4
       ctx.globalAlpha = 0.5
-      ctx.strokeStyle = INK
+      ctx.strokeStyle = inkCol
       ctx.strokeRect(r.x, r.y, r.w, r.h)
       ctx.setLineDash([])
       ctx.restore()
@@ -810,7 +886,8 @@ export class Renderer {
     for (let i = 0; i < eng.slots; i++) {
       clipGlyph(ctx, 96 + i * 20, 72, 14, i < pinned ? '#c98a2d' : 'rgba(43,38,32,0.4)', time)
     }
-    // carried ink: bottle glyph + pips (RE-INKING)
+    // carried ink: bottle glyph + COLORED pips in queue order — the
+    // leftmost pip is the swallow the next stroke will spend (RE-INKING)
     const ix = 36 + eng.roomDef.maxCharges * 20 + 22
     handText(ctx, 'ink', ix - 6, 34, 10.5, { alpha: 0.6, seed: 104, time })
     ctx.strokeStyle = INK
@@ -819,8 +896,9 @@ export class Renderer {
     wobblyLine(ctx, ix + 3, 44, ix + 3, 39, 83, time, 0.4)
     wobblyLine(ctx, ix + 8, 44, ix + 8, 39, 84, time, 0.4)
     for (let i = 0; i < INK_MAX; i++) {
-      ctx.fillStyle = INK
-      ctx.globalAlpha = i < eng.ink ? 0.9 : 0.22
+      const c = eng.inkCharges[i]
+      ctx.fillStyle = c ? (c === 'black' ? INK : INK_COLORS[c].body) : INK
+      ctx.globalAlpha = c ? 0.9 : 0.22
       ctx.beginPath()
       ctx.arc(ix + 22 + i * 13, 50, 3.4, 0, Math.PI * 2)
       ctx.fill()
@@ -869,11 +947,14 @@ export class Renderer {
       let a = 1
       if (n.t < 0.12) a = n.t / 0.12
       else if (n.t > n.dur - 0.35) a = Math.max(0, (n.dur - n.t) / 0.35)
+      // the Observer's handwriting wobbles as it dries (v1.1)
+      const shakyRot = n.shaky ? Math.sin(time * 9 + n.id) * 0.012 : 0
+      const shakyA = n.shaky ? 0.78 + 0.12 * Math.sin(time * 13 + n.id * 2) : 1
       handText(ctx, n.text, 930, ny, 13, {
         align: 'right',
         color: n.color,
-        alpha: 0.85 * a,
-        rot: n.rot,
+        alpha: 0.85 * a * shakyA,
+        rot: n.rot + shakyRot,
         seed: n.id * 7,
         time,
       })
