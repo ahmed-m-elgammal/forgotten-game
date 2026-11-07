@@ -16,6 +16,7 @@
 import type {
   EndingInfo,
   EngineLike,
+  GameMode,
   GameStatus,
   InkColor,
   NoteRT,
@@ -35,6 +36,7 @@ import {
   BRITTLE_LIFE,
   CHARGE_REGEN,
   COYOTE,
+  ENDLESS_BOOKMARKS,
   GRAVITY,
   GRIP_ACCEL,
   GRIP_DRAG,
@@ -69,6 +71,7 @@ import {
 } from './types'
 import { RULES, applyDistortion, undoDistortion } from './rules'
 import { ROOMS } from './rooms'
+import { endlessRoom } from './endless'
 import { Observer } from './observer'
 import { GRAPHITE, INK, reducedMotion } from '../render/paper'
 import type { AudioEngine } from '../audio/synth'
@@ -115,7 +118,9 @@ const LABEL_LEG_S = 2.2
 export class GameEngine implements EngineLike {
   // ---- identity & time -------------------------------------------
   status: GameStatus = 'title'
+  mode: GameMode = 'campaign'
   time = 0 // engine clock; frozen while paused → the whole page holds still
+  runTime = 0 // seconds of LIVE play this run (menus/transitions excluded)
   uiVersion = 1 // bumped on any UI-relevant change (shell re-renders)
   audio: AudioEngine
   observer = new Observer()
@@ -184,6 +189,11 @@ export class GameEngine implements EngineLike {
   private lastUncircleAt = -999
   private strangerFarewellDone = false
 
+  // ---- endless mode (v1.2) -----------------------------------------
+  endlessDepth = 0 // 1-based: which generated page you are on
+  bookmarks = ENDLESS_BOOKMARKS // the endless lives (refill per page)
+  private endlessDef: RoomDef | null = null // kept so R can redraw the same page
+
   // ---- scheduling ----------------------------------------------------
   nextEventAt = 0
   lastRespawnAt = 0
@@ -237,7 +247,7 @@ export class GameEngine implements EngineLike {
   snapshot(): UiSnapshot {
     const top = this.observer.topKept()
     const stats: UiStats | null =
-      this.status === 'victory'
+      this.status === 'victory' || this.status === 'gameover'
         ? {
             pagesCleared: this.stats.pagesCleared,
             erased: this.stats.erased,
@@ -253,10 +263,13 @@ export class GameEngine implements EngineLike {
     return {
       version: this.uiVersion,
       status: this.status,
+      mode: this.mode,
       roomIndex: this.roomIndex,
-      roomCount: ROOMS.length,
+      roomCount: this.mode === 'endless' ? this.roomIndex + 1 : ROOMS.length,
       roomName: this.roomDef.name,
       roomSubtitle: this.roomDef.subtitle,
+      bookmarks: this.bookmarks,
+      runTime: this.runTime,
       charges: this.charges,
       maxCharges: this.roomDef.maxCharges,
       slots: this.slots,
@@ -289,10 +302,9 @@ export class GameEngine implements EngineLike {
     }
   }
 
-  startRun(): void {
-    this.audio.unlock()
-    this.audio.resume()
+  private resetRunStats(): void {
     this.observer = new Observer()
+    this.runTime = 0
     this.stats = {
       pagesCleared: 0,
       erased: 0,
@@ -307,10 +319,39 @@ export class GameEngine implements EngineLike {
     this.ending = null
     this.legendOpen = false
     this.firstWarningHintDone = false
+  }
+
+  startRun(): void {
+    this.audio.unlock()
+    this.audio.resume()
+    this.mode = 'campaign'
+    this.resetRunStats()
     this.roomIndex = 0
     this.loadRoom(0)
     this.status = 'playing'
     this.bumpUi()
+  }
+
+  /** THE MARGINS (v1.2): endless mode — the notebook keeps writing.
+   *  Same world, same fairness, generated pages, three bookmarks. */
+  startEndless(): void {
+    this.audio.unlock()
+    this.audio.resume()
+    this.mode = 'endless'
+    this.resetRunStats()
+    this.endlessDepth = 1
+    this.loadEndless(1)
+    this.status = 'playing'
+    this.bumpUi()
+  }
+
+  /** generate + load page `depth`; the HUD number continues the
+   *  campaign count (page 9 is endless depth 1) */
+  loadEndless(depth: number): void {
+    this.endlessDepth = depth
+    this.endlessDef = endlessRoom(depth)
+    this.bookmarks = ENDLESS_BOOKMARKS // fresh page, fresh bookmarks
+    this.loadRoomDef(this.endlessDef, 7 + depth, 'page')
   }
 
   pause(): void {
@@ -327,17 +368,24 @@ export class GameEngine implements EngineLike {
     this.bumpUi()
   }
 
-  /** R key / pause-menu button — resets the page, keeps run stats. */
+  /** R key / pause-menu button — resets the page, keeps run stats.
+   *  Endless: redraws the SAME generated page (bookmarks refill). */
   restartRoom(): void {
-    if (this.status === 'title' || this.status === 'victory') return
+    if (this.status === 'title' || this.status === 'victory' || this.status === 'gameover') return
     this.audio.resume()
-    this.loadRoom(this.roomIndex)
+    if (this.mode === 'endless' && this.endlessDef) {
+      this.loadRoomDef(this.endlessDef, this.roomIndex, 'page')
+      this.bookmarks = ENDLESS_BOOKMARKS
+    } else {
+      this.loadRoom(this.roomIndex)
+    }
     this.legendOpen = false
     this.status = 'playing'
     this.bumpUi()
   }
 
   quitToTitle(): void {
+    this.mode = 'campaign'
     this.loadRoom(0)
     this.notes = []
     this.bigNote = null
@@ -402,6 +450,11 @@ export class GameEngine implements EngineLike {
       case 'victory':
         if (a === 'confirm') this.startRun()
         break
+      case 'gameover':
+        // quick retry; the shell's buttons do the same via startEndless/quit
+        if (a === 'confirm') this.startEndless()
+        else if (a === 'quit') this.quitToTitle()
+        break
       case 'roomclear':
         // transitions are < 1.2s, but R (restart) always works
         if (a === 'restart') this.restartRoom()
@@ -458,7 +511,9 @@ export class GameEngine implements EngineLike {
       if (this.bigNote.t > this.bigNote.dur) this.bigNote = null
     }
 
-    if (this.status === 'title' || this.status === 'victory') return
+    // menu statuses: the page holds still (gameover included — the
+    // score screen is the endless run's victory screen)
+    if (this.status === 'title' || this.status === 'victory' || this.status === 'gameover') return
 
     if (this.status === 'dead') {
       this.transitionT += dt
@@ -483,6 +538,7 @@ export class GameEngine implements EngineLike {
     }
 
     // ---------------- PLAYING ----------------
+    this.runTime += dt // live play only — menus and transitions don't count
     this.processIntro()
     this.updateSketchNudge(dt)
     this.updateRules(dt)
@@ -1267,6 +1323,15 @@ export class GameEngine implements EngineLike {
     this.transitionT = 0
     this.transitionDur = DEAD_DUR
     this.stats.erased++
+    // endless: a fall spends a bookmark — the last one closes the book
+    if (this.mode === 'endless') {
+      this.bookmarks = Math.max(0, this.bookmarks - 1)
+      this.pushNote(
+        this.bookmarks > 0 ? `a bookmark slips away. ${this.bookmarks} left.` : 'the last bookmark…',
+        '#b6452c',
+        4.5,
+      )
+    }
     this.audio.stopWaver()
     this.audio.stopSketchLoop()
     this.sketchMode = false
@@ -1277,6 +1342,11 @@ export class GameEngine implements EngineLike {
 
   /** soft recovery: everything back to STABLE — the softlock guard */
   private doRespawn(): void {
+    // endless: out of bookmarks — the notebook closes on this run
+    if (this.mode === 'endless' && this.bookmarks <= 0) {
+      this.endEndlessRun()
+      return
+    }
     for (const rt of this.rules.values()) {
       if (rt.phase !== 'stable') undoDistortion(rt.id, rt.targets, this)
       rt.phase = 'stable'
@@ -1323,6 +1393,12 @@ export class GameEngine implements EngineLike {
 
   private doAdvance(): void {
     this.switched = true
+    if (this.mode === 'endless') {
+      // the notebook just writes the next page — there is no last one
+      this.loadEndless(this.endlessDepth + 1)
+      this.bumpUi()
+      return
+    }
     if (this.roomIndex + 1 < ROOMS.length) {
       this.roomIndex++
       this.loadRoom(this.roomIndex)
@@ -1338,9 +1414,27 @@ export class GameEngine implements EngineLike {
     }
   }
 
+  /** endless run over: the score screen reads everything from the
+   *  snapshot (stats + runTime + roomIndex); the SHELL owns the
+   *  best-page persistence — the engine never touches localStorage. */
+  private endEndlessRun(): void {
+    this.status = 'gameover'
+    this.audio.stopWaver()
+    this.audio.stopSketchLoop()
+    this.sketchMode = false
+    this.drag = null
+    this.audio.gameOver()
+    this.bumpUi()
+  }
+
   // ---- room lifecycle -----------------------------------------------
   loadRoom(i: number): void {
-    const rd = ROOMS[i]
+    this.loadRoomDef(ROOMS[i], i, 'room')
+  }
+
+  /** the single page-setup path — authored rooms and generated pages
+   *  share everything except the label the margin note opens with */
+  loadRoomDef(rd: RoomDef, i: number, label: 'room' | 'page'): void {
     this.audio.stopWaver() // never let a warning waver leak across pages
     this.roomDef = rd
     this.roomIndex = i
@@ -1378,7 +1472,7 @@ export class GameEngine implements EngineLike {
       at: this.time + 1.2 + idx * 3.4,
       big: true,
     }))
-    this.pushNote(`room ${i + 1} — ${rd.name}`, INK, 3.5)
+    this.pushNote(`${label} ${i + 1} — ${rd.name}`, INK, 3.5)
     this.nextEventAt = this.time + rd.firstEventDelay
     this.lastRespawnAt = this.time
     this.scriptFired = false
@@ -1494,5 +1588,12 @@ export class GameEngine implements EngineLike {
     const k = Math.max(0, Math.min(INK_MAX, n))
     this.inkCharges = Array.from({ length: k }, () => color)
     this.bumpUi()
+  }
+
+  /** jump straight into endless mode at a given depth (testing the
+   *  deep pages without playing to them) */
+  debugStartEndless(depth = 1): void {
+    this.startEndless()
+    if (depth > 1) this.loadEndless(depth)
   }
 }

@@ -12,7 +12,7 @@
 // audio, RAF) is created inside the effect and FULLY destroyed
 // in the cleanup — remounts can never double loops or listeners.
 // ============================================================
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Volume2, VolumeX } from 'lucide-react'
 import { GameEngine } from '@/game/core/engine'
 import { InputManager } from '@/game/input'
@@ -24,13 +24,82 @@ import { VIEW_H, VIEW_W } from '@/game/core/types'
 
 const HAND = { fontFamily: '"Comic Sans MS","Segoe Print","Chalkboard SE",cursive,sans-serif' }
 
+/** endless best, persisted locally — pages reached (and when).
+ *  An external store (not React state): the engine flips gameover
+ *  asynchronously, and localStorage is not React's to own — the
+ *  shell subscribes, writes, and lets the store notify. */
+const BEST_KEY = 'forgotten-best-page'
+interface BestRecord {
+  pages: number
+  at: number
+}
+let bestRaw = '' // last-seen serialization (stable getSnapshot)
+let bestRec: BestRecord | null = null
+const bestListeners = new Set<() => void>()
+function readBestRaw(): string {
+  try {
+    return window.localStorage.getItem(BEST_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+function getBestSnapshot(): BestRecord | null {
+  const raw = readBestRaw()
+  if (raw !== bestRaw) {
+    bestRaw = raw
+    bestRec = null
+    try {
+      const p = JSON.parse(raw) as BestRecord
+      if (typeof p?.pages === 'number') bestRec = { pages: p.pages, at: p.at }
+    } catch {
+      /* unreadable record — treat as no best */
+    }
+  }
+  return bestRec
+}
+function subscribeBest(cb: () => void): () => void {
+  bestListeners.add(cb)
+  window.addEventListener('storage', cb)
+  return () => {
+    bestListeners.delete(cb)
+    window.removeEventListener('storage', cb)
+  }
+}
+/** record a finished endless run — saves + notifies only on a new best */
+let lastRunSetBest = false
+function lastRunWasBest(): boolean {
+  return lastRunSetBest
+}
+function recordRun(reached: number): void {
+  lastRunSetBest = false
+  const prev = getBestSnapshot()
+  if (!prev || reached > prev.pages) {
+    lastRunSetBest = true
+    try {
+      window.localStorage.setItem(BEST_KEY, JSON.stringify({ pages: reached, at: Date.now() }))
+    } catch {
+      /* private mode — the best simply lives in this session */
+    }
+    bestRaw = '' // force a re-read
+    bestListeners.forEach((cb) => cb())
+  }
+}
+function fmtTime(s: number): string {
+  const m = Math.floor(s / 60)
+  const sec = Math.floor(s % 60)
+  return `${m}:${String(sec).padStart(2, '0')}`
+}
+
 const INITIAL_UI: UiSnapshot = {
   version: 0,
   status: 'title',
+  mode: 'campaign',
   roomIndex: 0,
   roomCount: 8,
   roomName: '',
   roomSubtitle: '',
+  bookmarks: 3,
+  runTime: 0,
   charges: 0,
   maxCharges: 0,
   slots: 0,
@@ -49,6 +118,13 @@ export default function GameShell() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const engineRef = useRef<GameEngine | null>(null)
   const [ui, setUi] = useState<UiSnapshot>(INITIAL_UI)
+  const best = useSyncExternalStore(subscribeBest, getBestSnapshot, () => null)
+  // persist the endless best when a run ends (store write, no setState —
+  // the store notification re-renders the score line)
+  useEffect(() => {
+    if (ui.status !== 'gameover') return
+    recordRun(ui.roomIndex + 1) // endless pages continue the count
+  }, [ui.status, ui.roomIndex])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -178,10 +254,23 @@ export default function GameShell() {
               <button style={HAND} className={btn} tabIndex={-1} onClick={act((e) => e.startRun())}>
                 Begin
               </button>
+              <button
+                style={HAND}
+                className={btn}
+                tabIndex={-1}
+                onClick={act((e) => e.startEndless())}
+              >
+                The margins (endless)
+              </button>
               <button style={HAND} className={btn} tabIndex={-1} onClick={act((e) => e.toggleLegend())}>
                 What do the tokens mean?
               </button>
             </div>
+            {best && (
+              <p style={HAND} className="mt-4 text-sm opacity-70">
+                the notebook&apos;s best: page {best.pages}
+              </p>
+            )}
             <p className="mt-5 text-xs opacity-60">
               ENTER to begin · ←/→ or A/D move · SPACE jump · 1–7 select a rule · ENTER keeps it ·
               C sketch · sound starts after your first key or click
@@ -198,7 +287,7 @@ export default function GameShell() {
               the page holds still.
             </h2>
             <p className="mt-1 text-sm opacity-70">
-              room {ui.roomIndex + 1} — {ui.roomName}
+              {ui.mode === 'endless' ? 'page' : 'room'} {ui.roomIndex + 1} — {ui.roomName}
             </p>
             <div className="mt-5 flex flex-col gap-3">
               <button style={HAND} className={btn} tabIndex={-1} onClick={act((e) => e.resumeGame())}>
@@ -277,6 +366,74 @@ export default function GameShell() {
             <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
               <button style={HAND} className={btn} tabIndex={-1} onClick={act((e) => e.startRun())}>
                 Play again
+              </button>
+              <button
+                style={HAND}
+                className={btn}
+                tabIndex={-1}
+                onClick={act((e) => e.startEndless())}
+              >
+                Keep writing (endless)
+              </button>
+              <button style={HAND} className={btn} tabIndex={-1} onClick={act((e) => e.quitToTitle())}>
+                Title
+              </button>
+              <button style={HAND} className={btn} tabIndex={-1} onClick={act((e) => e.toggleLegend())}>
+                Legend
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---------------- GAME OVER (endless) ---------------- */}
+      {ui.status === 'gameover' && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#f5ecd9]/95 p-4">
+          <div className="max-h-full w-full max-w-2xl overflow-y-auto rounded-xl border-2 border-[#2b2620] bg-[#f5ecd9] p-6 text-center text-[#2b2620] shadow-[5px_6px_0_rgba(43,38,32,0.6)] sm:p-8">
+            <p style={HAND} className="text-sm opacity-60">
+              the last bookmark is spent
+            </p>
+            <h2 style={HAND} className="mt-1 text-3xl sm:text-4xl">
+              the notebook closes.
+            </h2>
+            <p style={HAND} className="mt-4 text-lg">
+              you lived to page <b>{ui.roomIndex + 1}</b>
+            </p>
+            <p style={HAND} className="mt-1 text-sm opacity-70">
+              {ui.status === 'gameover' && lastRunWasBest()
+                ? 'a new deepest page.'
+                : best
+                  ? `the notebook's best: page ${best.pages}`
+                  : 'the first dive into the margins.'}
+            </p>
+
+            {ui.stats && (
+              <div className="mx-auto mt-6 grid max-w-md grid-cols-2 gap-3 text-left text-sm sm:grid-cols-3">
+                <Stat label="time in the margins" value={fmtTime(ui.runTime)} />
+                <Stat label="pages turned" value={`${ui.stats.pagesCleared}`} />
+                <Stat label="times erased" value={`${ui.stats.erased}`} />
+                <Stat label="jumps" value={`${ui.stats.jumps}`} />
+                {ui.stats.planksDrawn > 0 && (
+                  <Stat label="lines drawn" value={`${ui.stats.planksDrawn}`} />
+                )}
+                {ui.stats.redBounces > 0 && (
+                  <Stat label="red springs" value={`${ui.stats.redBounces}`} dot="#c23a2b" />
+                )}
+                {ui.stats.blueTears > 0 && (
+                  <Stat label="planks torn" value={`${ui.stats.blueTears}`} dot="#39628f" />
+                )}
+                {ui.stats.topKept && (
+                  <Stat
+                    label="top kept rule"
+                    value={RULES[ui.stats.topKept.rule as RuleId].name}
+                  />
+                )}
+              </div>
+            )}
+
+            <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
+              <button style={HAND} className={btn} tabIndex={-1} onClick={act((e) => e.startEndless())}>
+                Write again
               </button>
               <button style={HAND} className={btn} tabIndex={-1} onClick={act((e) => e.quitToTitle())}>
                 Title
@@ -381,6 +538,11 @@ export default function GameShell() {
             <p className="mt-4 text-xs opacity-60">
               Falling off the page is never the end: you are erased back to your last anchor. R
               restarts the room at any time.
+            </p>
+            <p className="mt-2 text-xs opacity-60">
+              <b>THE MARGINS (endless):</b> the notebook writes pages forever. Three bookmarks per
+              page — a fall spends one; when the last is gone, the notebook closes. Deepest page
+              wins.
             </p>
             <div className="mt-4 text-center">
               <button style={HAND} className={btn} tabIndex={-1} onClick={act((e) => e.toggleLegend())}>

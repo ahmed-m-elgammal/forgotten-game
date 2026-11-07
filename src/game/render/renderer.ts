@@ -908,8 +908,35 @@ export class Renderer {
     if (eng.stats.erased > 0) {
       handText(ctx, `erased ×${eng.stats.erased}`, 30, 98, 10, { alpha: 0.45, seed: 102, time })
     }
-    // room tag
-    handText(ctx, `room ${eng.roomIndex + 1} — ${eng.roomDef.name}`, 34, 566, 12, {
+    // endless: bookmarks — three little ribbons, spent ones hollow
+    if (eng.mode === 'endless') {
+      handText(ctx, 'bookmarks', 30, 118, 10, { alpha: 0.55, seed: 106, time })
+      for (let i = 0; i < 3; i++) {
+        const bx = 38 + i * 15
+        const by = 126
+        const live = i < eng.bookmarks
+        ctx.beginPath()
+        ctx.moveTo(bx, by)
+        ctx.lineTo(bx + 8, by)
+        ctx.lineTo(bx + 8, by + 13)
+        ctx.lineTo(bx + 4, by + 9.5)
+        ctx.lineTo(bx, by + 13)
+        ctx.closePath()
+        if (live) {
+          ctx.fillStyle = '#b6452c'
+          ctx.globalAlpha = 0.85
+          ctx.fill()
+        } else {
+          ctx.strokeStyle = 'rgba(43,38,32,0.35)'
+          ctx.lineWidth = 1.2
+          ctx.stroke()
+        }
+        ctx.globalAlpha = 1
+      }
+    }
+    // room tag — endless pages continue the campaign count
+    const tagLabel = eng.mode === 'endless' ? 'page' : 'room'
+    handText(ctx, `${tagLabel} ${eng.roomIndex + 1} — ${eng.roomDef.name}`, 34, 566, 12, {
       alpha: 0.6,
       seed: 103,
       time,

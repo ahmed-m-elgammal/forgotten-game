@@ -230,6 +230,18 @@ export class AudioEngine {
     this.tone({ f: 130.81, dur: 1.7, g: 0.14, attack: 0.3 })
   }
 
+  /** endless run over — the notebook closes: three soft falling
+   *  notes and a last page-settle, the mirror of roomClear */
+  gameOver(): void {
+    if (!this.ctx) return
+    const t = this.ctx.currentTime
+    const notes = [392, 311.13, 233.08]
+    notes.forEach((f, i) => {
+      this.tone({ f, at: t + i * 0.22, dur: 0.42, g: 0.2, filter: 1200 })
+    })
+    this.hiss({ at: t + 0.66, dur: 0.3, g: 0.16, type: 'lowpass', f: 500 })
+  }
+
   /** very quiet tick on jump */
   jumpTick(): void {
     this.tone({ f: 620, f1: 880, type: 'triangle', dur: 0.06, g: 0.06 })

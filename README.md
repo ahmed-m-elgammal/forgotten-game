@@ -10,8 +10,7 @@ way across.
 Everything is procedural — paper grain, boiling ink lines, the sounds. No
 sprites, no audio files. The whole campaign is data.
 
-**Play: `http(s)://<host>/forgotten-game/` once Pages is enabled (see Deploy),
-or run it locally (below).**
+**Play: https://ahmed-m-elgammal.github.io/forgotten-game/ — or run it locally (below).**
 
 ---
 
@@ -66,6 +65,21 @@ of *your* planks too long, it circles that plank in pencil and strikes it —
 the plank dries faster. The ending asks what you kept, and (new in v1.1)
 *how* you played: only holding on, or writing back.
 
+## The Margins (v1.2: endless mode)
+
+After the last page — or straight from the title — the notebook keeps
+writing pages forever. Each page is **generated** (`src/game/core/endless.ts`):
+geometry, rule mix, ink drops and pacing all scale with depth, but the
+fairness math never loosens — every gap stays inside the verified jump
+reach, every climb stays under 90px, and every high door rests on a
+protected ledge. Three **bookmarks** per page: a fall spends one; the last
+one closes the notebook. Deepest page wins, best is kept on your machine.
+Pages keep the campaign count (page 9, 10, 11, …).
+
+A headless auditor (`bun scripts/verify-endless.ts`) generates hundreds of
+pages and re-checks every one against the fairness contract, then
+smoke-runs the whole state machine — 7,600+ assertions, zero canvas.
+
 ## Controls
 
 ```
@@ -76,11 +90,13 @@ R            restart room    ESC             pause
 M            mute            L               legend
 ```
 
-## Campaign (8 pages)
+## Campaign (8 pages) + The Margins
 
 First Words · Edges · Mirrors · The Grip · **Imitation** · The Watcher ·
-The Naming · What You Kept. Every room is authored data — geometry, rules,
-drops, pacing — tuned against the physics math in `src/game/core/rooms.ts`.
+The Naming · What You Kept — then the endless Margins, written forever.
+Every campaign room is authored data — geometry, rules, drops, pacing —
+tuned against the physics math in `src/game/core/rooms.ts`; endless pages
+are generated under the same math in `src/game/core/endless.ts`.
 
 ## Run it
 
@@ -99,13 +115,15 @@ No database, no API usage — the scaffold's `/api` route is unused by the game.
 src/game/core/    engine.ts (simulation + fairness contract)
                   rules.ts  (the rule registry: one entry = one rule)
                   rooms.ts  (the whole campaign as data)
+                  endless.ts (the page generator + fairness auditor)
                   observer.ts (habit tracking, bias, endings)
                   types.ts  (shared vocabulary + all tuning constants)
 src/game/render/  renderer.ts (draws engine state, never mutates it)
                   paper.ts   (grain, line boil, handwriting primitives)
 src/game/audio/   synth.ts   (100% synthesized SFX, lazy AudioContext)
 src/game/input.ts keyboard/mouse bindings, StrictMode-safe
-src/components/GameShell.tsx  React chrome: title/pause/victory/legend
+src/components/GameShell.tsx  React chrome: title/pause/victory/gameover/legend
+scripts/verify-endless.ts     headless fairness audit + state-machine smoke
 ```
 
 ### Design rules that never break
@@ -128,6 +146,9 @@ STATIC_EXPORT=1 NEXT_DIST_DIR=.next-export bunx next build
 
 ## Version history
 
+- **v1.2.0 — the margins.** Endless mode: generated pages forever,
+  bookmarks as lives, deepest-page score with a local best; headless
+  fairness auditor (7,600+ assertions).
 - **v1.1.0 — it begins to write back.** Ink colors (red springs, blue
   tears) with FIFO pen queue; the Observer's uncircle; the Imitation room
   and its stranger plank; ending codas; 8-page campaign; GitHub Pages deploy.

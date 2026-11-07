@@ -37,6 +37,7 @@ export type GameStatus =
   | 'dead' // page-flip transition after falling into the margin
   | 'roomclear' // page-turn transition between rooms
   | 'victory'
+  | 'gameover' // endless mode: the last bookmark was spent
 
 export interface Rect {
   x: number
@@ -180,14 +181,22 @@ export interface UiStats {
   blueTears: number
 }
 
+/** The two ways to play (v1.2). 'campaign' is the authored 8-page
+ *  story; 'endless' is the generator writing pages forever — three
+ *  bookmarks are your only lives, and the score is the deepest page. */
+export type GameMode = 'campaign' | 'endless'
+
 /** What the engine tells React, once per UI-relevant change. */
 export interface UiSnapshot {
   version: number
   status: GameStatus
+  mode: GameMode
   roomIndex: number
   roomCount: number
   roomName: string
   roomSubtitle: string
+  bookmarks: number
+  runTime: number // seconds of live play this run (menus excluded)
   charges: number
   maxCharges: number
   slots: number
@@ -320,3 +329,18 @@ export const PIN_DURATION = 12 // a kept rule is immune for this long
 export const CHARGE_REGEN = 11 // seconds to regain one memory charge
 
 export const TOKEN_R = 26
+
+// ---- ENDLESS MODE (v1.2) --------------------------------------------
+// The generator writes pages forever; the score is the deepest page
+// you reach. Three bookmarks per page — a fall spends one, the last
+// one closes the notebook. Bookmarks refill on every new page, so
+// the run's length is decided by cumulative difficulty, not by one
+// unlucky page.
+export const ENDLESS_BOOKMARKS = 3
+// fairness floors the generator may never cross (they match the
+// completability math at the top of rooms.ts — keep them in sync):
+export const ENDLESS_MAX_GAP = 170 // < 190px verified reach, keeps slack
+export const ENDLESS_MAX_CLIMB = 88 // < ~105px weakened-jump reach
+export const ENDLESS_MAX_LEDGE_GAP = 110 // ledge-to-ledge horizontal reach
+export const ENDLESS_MIN_WARN = 2.5 // telegraphing never gets shorter
+export const ENDLESS_MIN_EVENT = 6.5 // events never come faster than this
