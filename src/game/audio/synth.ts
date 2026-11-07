@@ -16,6 +16,7 @@ export class AudioEngine {
   private noiseBuf: AudioBuffer | null = null
   private muted = sessionMuted
   private waver: { stop: () => void } | null = null
+  private sketchLoop: { stop: () => void } | null = null
 
   // ---- lifecycle ---------------------------------------------------
   /** Call on ANY user gesture (keydown / pointerdown). */
@@ -57,6 +58,7 @@ export class AudioEngine {
 
   dispose(): void {
     this.stopWaver()
+    this.stopSketchLoop()
     const c = this.ctx
     this.ctx = null
     this.master = null
@@ -266,6 +268,92 @@ export class AudioEngine {
   /** unpinning early */
   unpin(): void {
     this.tone({ f: 480, f1: 360, type: 'triangle', dur: 0.09, g: 0.09 })
+  }
+
+  // ---- RE-INKING SFX -------------------------------------------------
+  /** an ink bottle plucked from the page — short wet pluck */
+  inkPickup(): void {
+    this.tone({ f: 660, f1: 990, type: 'triangle', dur: 0.09, g: 0.16 })
+    this.tone({ f: 1320, dur: 0.05, g: 0.06, at: (this.ctx?.currentTime ?? 0) + 0.06 })
+  }
+
+  /** pencil tip tap — a stroke (or the sketch mode) begins */
+  sketchStart(): void {
+    this.hiss({ dur: 0.05, g: 0.2, type: 'bandpass', f: 2400, q: 1.2 })
+    this.tone({ f: 190, type: 'triangle', dur: 0.05, g: 0.1 })
+  }
+
+  /** soft tap when a plank is placed */
+  plankPlace(): void {
+    this.tone({ f: 220, f1: 180, type: 'triangle', dur: 0.08, g: 0.18 })
+    this.hiss({ dur: 0.04, g: 0.12, type: 'lowpass', f: 900 })
+  }
+
+  /** a plank dries away — soft downward pencil sweep */
+  plankFade(): void {
+    this.hiss({ dur: 0.28, g: 0.14, type: 'bandpass', f: 1200, f1: 260, q: 0.7 })
+  }
+
+  /** THE NAMING rescue — a quick re-inking scribble burst */
+  reInk(): void {
+    if (!this.ok()) return
+    const t = this.ctx as AudioContext
+    const t0 = t.currentTime
+    this.hiss({ at: t0, dur: 0.1, g: 0.22, type: 'bandpass', f: 2100, f1: 1500, q: 1.1 })
+    this.hiss({ at: t0 + 0.1, dur: 0.09, g: 0.18, type: 'bandpass', f: 1700, f1: 2300, q: 1.1 })
+    this.tone({ f: 520, f1: 780, type: 'triangle', at: t0 + 0.02, dur: 0.12, g: 0.1 })
+  }
+
+  /** quiet bandpassed noise scratch while a stroke is being dragged */
+  startSketchLoop(): void {
+    if (!this.ok() || this.sketchLoop) return
+    const ctx = this.ctx as AudioContext
+    const t0 = ctx.currentTime
+    const buf = this.noiseBuffer()
+    if (!buf) return
+    const src = ctx.createBufferSource()
+    src.buffer = buf
+    src.loop = true
+    const fl = ctx.createBiquadFilter()
+    fl.type = 'bandpass'
+    fl.frequency.value = 1900
+    fl.Q.value = 2.2
+    // a slow wobble on the filter makes it read as “scribble”
+    const lfo = ctx.createOscillator()
+    lfo.frequency.value = 7.3
+    const lfoG = ctx.createGain()
+    lfoG.gain.value = 420
+    lfo.connect(lfoG)
+    lfoG.connect(fl.frequency)
+    const g = ctx.createGain()
+    g.gain.setValueAtTime(0.0001, t0)
+    g.gain.linearRampToValueAtTime(0.028, t0 + 0.06)
+    src.connect(fl)
+    fl.connect(g)
+    g.connect(this.master as GainNode)
+    src.start(t0)
+    lfo.start(t0)
+    this.sketchLoop = {
+      stop: () => {
+        const t = ctx.currentTime
+        g.gain.cancelScheduledValues(t)
+        g.gain.setValueAtTime(Math.max(0.0001, g.gain.value), t)
+        g.gain.linearRampToValueAtTime(0.0001, t + 0.07)
+        src.stop(t + 0.1)
+        lfo.stop(t + 0.1)
+      },
+    }
+  }
+
+  stopSketchLoop(): void {
+    if (this.sketchLoop) {
+      try {
+        this.sketchLoop.stop()
+      } catch {
+        // nodes already stopped — fine
+      }
+      this.sketchLoop = null
+    }
   }
 
   // ---- warning waver (looped while a countdown runs) -------------------

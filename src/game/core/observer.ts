@@ -41,16 +41,23 @@ const RULE_ENDINGS: Record<RuleId, string> = {
   direction:
     'You kept left and right. The two ways will remember which is which.',
   jump: 'You kept the leap. Somewhere, a small figure is still mid-air because you said so.',
+  grip: 'You kept the grip. Nothing slid away while you held on — the world stayed where you put it.',
+  naming:
+    'You kept the name. As long as you kept calling it OUT?, the door remembered how to be a door.',
 }
 
 export class Observer {
-  /** cumulative across the whole run — this IS the ending data */
+  /** cumulative across the whole run — this IS the ending data.
+   *  Key order = registry order, which also makes topKept()'s
+   *  strict-greater comparison a deterministic tie-break. */
   pinCount: Record<RuleId, number> = {
     gravity: 0,
     collision: 0,
     platforms: 0,
     direction: 0,
     jump: 0,
+    grip: 0,
+    naming: 0,
   }
   totalJumps = 0
   totalPins = 0

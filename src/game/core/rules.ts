@@ -95,6 +95,33 @@ const jumpGlyph: GlyphFn = (ctx, cx, cy, r, time, seed) => {
   wobblyLine(ctx, cx - r * 0.5, cy + r * 0.72, cx + r * 0.5, cy + r * 0.72, seed + 2, time, 0.5)
 }
 
+const gripGlyph: GlyphFn = (ctx, cx, cy, r, time, seed) => {
+  // a sole/brake mark: two converging lines + short skid streaks
+  wobblyLine(ctx, cx - r * 0.75, cy - r * 0.5, cx + r * 0.75, cy - r * 0.05, seed, time, 0.6)
+  wobblyLine(ctx, cx - r * 0.75, cy + r * 0.6, cx + r * 0.75, cy + r * 0.15, seed + 1, time, 0.6)
+  // the skid streaks trailing off to the left
+  wobblyLine(ctx, cx - r * 0.8, cy - r * 0.02, cx - r * 0.3, cy - r * 0.02, seed + 2, time, 0.5)
+  wobblyLine(ctx, cx - r * 0.8, cy + r * 0.3, cx - r * 0.42, cy + r * 0.3, seed + 3, time, 0.5)
+  wobblyLine(ctx, cx - r * 0.8, cy + r * 0.62, cx - r * 0.55, cy + r * 0.62, seed + 4, time, 0.5)
+}
+
+const namingGlyph: GlyphFn = (ctx, cx, cy, r, time, seed) => {
+  // a door outline with a floating word-tag above it
+  wobblyLine(ctx, cx - r * 0.55, cy + r * 0.75, cx - r * 0.55, cy - r * 0.2, seed, time, 0.6)
+  wobblyLine(ctx, cx + r * 0.55, cy + r * 0.75, cx + r * 0.55, cy - r * 0.2, seed + 1, time, 0.6)
+  wobblyLine(ctx, cx - r * 0.55, cy + r * 0.75, cx + r * 0.55, cy + r * 0.75, seed + 2, time, 0.6)
+  ctx.fillStyle = ctx.strokeStyle
+  ctx.beginPath()
+  ctx.arc(cx + r * 0.28, cy + r * 0.32, 1.6, 0, Math.PI * 2)
+  ctx.fill()
+  // the tag with a scribbled word
+  wobblyLine(ctx, cx - r * 0.7, cy - r * 0.45, cx + r * 0.7, cy - r * 0.45, seed + 3, time, 0.5)
+  wobblyLine(ctx, cx + r * 0.7, cy - r * 0.45, cx + r * 0.7, cy - r * 0.85, seed + 4, time, 0.5)
+  wobblyLine(ctx, cx + r * 0.7, cy - r * 0.85, cx - r * 0.7, cy - r * 0.85, seed + 5, time, 0.5)
+  wobblyLine(ctx, cx - r * 0.7, cy - r * 0.85, cx - r * 0.7, cy - r * 0.45, seed + 6, time, 0.5)
+  wobblyLine(ctx, cx - r * 0.42, cy - r * 0.65, cx + r * 0.42, cy - r * 0.65, seed + 7, time, 0.5)
+}
+
 export const RULES: Record<RuleId, RuleDef> = {
   gravity: {
     id: 'gravity',
@@ -145,6 +172,26 @@ export const RULES: Record<RuleId, RuleDef> = {
     warningNote: 'the leap is losing its spring…',
     forgotNote: 'the leap loses its spring.',
     forgetDuration: 6,
+  },
+  grip: {
+    id: 'grip',
+    name: 'THE GRIP',
+    tagline: 'the holding',
+    color: '#a88a1a', // dark mustard — friction is leaving the page
+    glyph: gripGlyph,
+    warningNote: 'the grip is losing its hold…',
+    forgotNote: 'the ground forgets how to hold you.',
+    forgetDuration: 7,
+  },
+  naming: {
+    id: 'naming',
+    name: 'THE NAMING',
+    tagline: 'the word on the door',
+    color: '#c2447c', // rose — red-pen editing ink
+    glyph: namingGlyph,
+    warningNote: 'the name is slipping off the door…',
+    forgotNote: 'the door forgets what it is.',
+    forgetDuration: 7,
   },
 }
 
@@ -197,6 +244,15 @@ export function applyDistortion(
       eng.jumpFactor = 0.45
       eng.coyoteDisabled = true
       break
+    case 'grip':
+      // icy friction: the engine swaps its accel/decel model
+      eng.gripLost = true
+      break
+    case 'naming':
+      // the OUT? label detaches and the exit goes inert
+      eng.namingLost = true
+      eng.startLabelDrift()
+      break
   }
 }
 
@@ -234,6 +290,13 @@ export function undoDistortion(
           p.drift = null
         }
       }
+      break
+    case 'grip':
+      eng.gripLost = false
+      break
+    case 'naming':
+      eng.namingLost = false
+      eng.endLabelDrift()
       break
   }
 }

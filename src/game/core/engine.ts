@@ -18,6 +18,7 @@ import type {
   EngineLike,
   GameStatus,
   NoteRT,
+  PlankRT,
   PlatformRT,
   PlayerRT,
   Rect,
@@ -33,25 +34,40 @@ import {
   CHARGE_REGEN,
   COYOTE,
   GRAVITY,
+  GRIP_ACCEL,
+  GRIP_DRAG,
+  GRIP_TOP_SPEED,
+  GHOST_PLANK_W,
+  INK_MAX,
   JUMP_BUFFER,
   JUMP_V,
   MOVE_SPEED,
   PIN_DURATION,
+  PLANK_DRAG_MIN,
+  PLANK_H,
+  PLANK_LIFE,
+  PLANK_MAX_SLOPE,
+  PLANK_MAX_W,
+  PLANK_MIN_W,
   PLAYER_H,
   PLAYER_W,
+  SKETCH_MAX_PLANKS,
   TOKEN_R,
   VIEW_H,
+  VIEW_W,
 } from './types'
 import { RULES, applyDistortion, undoDistortion } from './rules'
 import { ROOMS } from './rooms'
 import { Observer } from './observer'
-import { INK } from '../render/paper'
+import { INK, reducedMotion } from '../render/paper'
 import type { AudioEngine } from '../audio/synth'
 
 /** live held-key state, owned by the InputManager via the shell */
 export interface HeldInput {
   left: boolean
   right: boolean
+  up: boolean // sketch-mode nudges (W/↑ while drawing)
+  down: boolean
 }
 
 const DEAD_DUR = 0.8 // page-flip into the margin
@@ -78,6 +94,12 @@ function makePlayer(v: Vec): PlayerRT {
     trailClock: 0,
   }
 }
+
+/** size of the drifting OUT? label (THE NAMING) — also its hitbox */
+const LABEL_W = 56
+const LABEL_H = 20
+/** seconds per leg of the label's wander between anchors */
+const LABEL_LEG_S = 2.2
 
 export class GameEngine implements EngineLike {
   // ---- identity & time -------------------------------------------
@@ -123,6 +145,24 @@ export class GameEngine implements EngineLike {
   inputInverted = false
   jumpFactor = 1
   coyoteDisabled = false
+  gripLost = false // THE GRIP: icy friction while forgotten
+  namingLost = false // THE NAMING: door inert, label adrift
+
+  // ---- THE NAMING label drift (deterministic from engine time) ------
+  labelRect: Rect = { x: 0, y: 0, w: LABEL_W, h: LABEL_H }
+  private labelAnchors: Vec[] = []
+  private labelDriftT0 = 0
+
+  // ---- RE-INKING: ink, drops, sketched planks, sketch mode ----------
+  ink = 0
+  inkDrops: Array<{ at: Vec; taken: boolean }> = []
+  planks: PlankRT[] = []
+  private plankSeq = 0
+  sketchMode = false
+  sketchOffset: Vec = { x: 40, y: 0 } // ghost plank offset from the player
+  drag: { active: boolean; x0: number; y0: number; x1: number; y1: number } | null = null
+  skids: Array<{ x: number; y: number; t: number }> = [] // icy slide streaks
+  private skidClock = 0
 
   // ---- scheduling ----------------------------------------------------
   nextEventAt = 0
@@ -140,8 +180,10 @@ export class GameEngine implements EngineLike {
     pagesCleared: 0,
     erased: 0,
     jumps: 0,
-    forgotten: { gravity: 0, collision: 0, platforms: 0, direction: 0, jump: 0 },
+    forgotten: { gravity: 0, collision: 0, platforms: 0, direction: 0, jump: 0, grip: 0, naming: 0 },
     totalPins: 0,
+    planksDrawn: 0,
+    inkCollected: 0,
   }
 
   private held: HeldInput
@@ -175,6 +217,8 @@ export class GameEngine implements EngineLike {
             jumps: this.stats.jumps,
             forgotten: { ...this.stats.forgotten },
             topKept: top,
+            planksDrawn: this.stats.planksDrawn,
+            inkCollected: this.stats.inkCollected,
           }
         : null
     return {
@@ -189,6 +233,8 @@ export class GameEngine implements EngineLike {
       slots: this.slots,
       pinnedCount: this.pinnedCount(),
       erased: this.stats.erased,
+      ink: this.ink,
+      inkMax: INK_MAX,
       muted: this.audio.isMuted(),
       legendOpen: this.legendOpen,
       selectedRule: this.activeOrder[this.selectedIdx] ?? null,
@@ -222,8 +268,10 @@ export class GameEngine implements EngineLike {
       pagesCleared: 0,
       erased: 0,
       jumps: 0,
-      forgotten: { gravity: 0, collision: 0, platforms: 0, direction: 0, jump: 0 },
+      forgotten: { gravity: 0, collision: 0, platforms: 0, direction: 0, jump: 0, grip: 0, naming: 0 },
       totalPins: 0,
+      planksDrawn: 0,
+      inkCollected: 0,
     }
     this.ending = null
     this.legendOpen = false
@@ -289,9 +337,22 @@ export class GameEngine implements EngineLike {
         if (a === 'confirm') this.startRun()
         break
       case 'playing':
-        if (a === 'confirm' || a === 'pin') this.togglePin()
+        if (this.sketchMode) {
+          // the sketch has first claim on keys — but Space still jumps
+          if (a === 'confirm') this.placeSketchKeyboard()
+          else if (a === 'pause') this.exitSketch() // ESC leaves the sketch first
+          else if (a === 'sketch') this.exitSketch() // C toggles it off
+          else if (a === 'restart') this.restartRoom()
+          else if (a === 'jump') this.player.jumpBuffer = JUMP_BUFFER
+          else if (a === 'pin') this.togglePin()
+          else if (a.startsWith('select:')) {
+            const i = Number(a.slice(7))
+            if (i >= 0 && i < this.activeOrder.length) this.selectedIdx = i
+          }
+        } else if (a === 'confirm' || a === 'pin') this.togglePin()
         else if (a === 'pause') this.pause()
         else if (a === 'restart') this.restartRoom()
+        else if (a === 'sketch') this.enterSketch()
         else if (a === 'jump') this.player.jumpBuffer = JUMP_BUFFER
         else if (a.startsWith('select:')) {
           const i = Number(a.slice(7))
@@ -317,25 +378,36 @@ export class GameEngine implements EngineLike {
     }
   }
 
-  /** deterministic token slots so mouse hit-tests match the drawing */
+  /** deterministic token slots so mouse hit-tests match the drawing.
+   *  Spread widened for seven tokens (7 rules) without crowding the
+   *  top-right margin-note stack. */
   tokenPos(i: number): Vec {
     const n = this.activeOrder.length
-    const x0 = 230
-    const x1 = 730
+    const x0 = 200
+    const x1 = 760
     const x = n <= 1 ? (x0 + x1) / 2 : x0 + ((x1 - x0) * i) / (n - 1)
     return { x, y: 54 }
   }
 
   pointerMove(x: number, y: number): void {
     this.hoverToken = this.tokenAt(x, y)
+    if (this.drag) this.sketchDragMove(x, y) // feed the live stroke
   }
 
   pointerDown(x: number, y: number): void {
     if (this.status !== 'playing') return
     const i = this.tokenAt(x, y)
-    if (i < 0) return
-    if (i === this.selectedIdx) this.togglePin()
-    else this.selectedIdx = i
+    if (i >= 0) {
+      // token taps stay short — they must never start a sketch stroke
+      if (i === this.selectedIdx) this.togglePin()
+      else this.selectedIdx = i
+      return
+    }
+    this.sketchDragStart(x, y)
+  }
+
+  pointerUp(x: number, y: number): void {
+    this.sketchDragEnd(x, y)
   }
 
   // ================================================================
@@ -381,10 +453,13 @@ export class GameEngine implements EngineLike {
 
     // ---------------- PLAYING ----------------
     this.processIntro()
+    this.updateSketchNudge(dt)
     this.updateRules(dt)
     this.scheduleEvents()
     this.updatePlatforms(dt)
+    this.updatePlanks()
     this.updatePlayer(dt)
+    this.updateLabel()
     this.checkInteractions()
     this.regenCharges(dt)
     for (const n of this.observer.tick(this.time)) {
@@ -426,7 +501,7 @@ export class GameEngine implements EngineLike {
   private scheduleEvents(): void {
     if (this.anyActiveDistortion()) return
 
-    // scripted set piece (room 5): sequential, still fully telegraphed
+    // scripted set piece (final page): sequential, still fully telegraphed
     if (this.scriptQueue.length > 0) {
       const id = this.scriptQueue.shift() as RuleId
       const rt = this.rules.get(id)
@@ -640,10 +715,24 @@ export class GameEngine implements EngineLike {
     if (this.held.right) dir += 1
     dir *= this.inputInverted ? -1 : 1
     if (dir !== 0) p.facing = dir > 0 ? 1 : -1
-    const target = dir * MOVE_SPEED
-    const acc = dir !== 0 ? 2600 : 2400
-    if (p.vx < target) p.vx = Math.min(target, p.vx + acc * dt)
-    else if (p.vx > target) p.vx = Math.max(target, p.vx - acc * dt)
+    if (this.gripLost) {
+      // THE GRIP forgotten: the page is ice. Pushing barely speeds you
+      // up; releasing does NOT brake — momentum just barely bleeds away.
+      if (dir !== 0) {
+        const gTarget = dir * GRIP_TOP_SPEED
+        if (p.vx < gTarget) p.vx = Math.min(gTarget, p.vx + GRIP_ACCEL * dt)
+        else if (p.vx > gTarget) p.vx = Math.max(gTarget, p.vx - GRIP_ACCEL * dt)
+      } else {
+        // no input: skip the old deceleration entirely — tiny drag only
+        p.vx *= Math.max(0, 1 - GRIP_DRAG * dt)
+      }
+      p.vx = Math.max(-GRIP_TOP_SPEED, Math.min(GRIP_TOP_SPEED, p.vx))
+    } else {
+      const target = dir * MOVE_SPEED
+      const acc = dir !== 0 ? 2600 : 2400
+      if (p.vx < target) p.vx = Math.min(target, p.vx + acc * dt)
+      else if (p.vx > target) p.vx = Math.max(target, p.vx - acc * dt)
+    }
 
     // gravity — GRAVITY oscillates 0.25x–0.6x with sideways drift
     const gscale = this.gravityOsc ? 0.425 + 0.175 * Math.sin(this.time * 1.7) : 1
@@ -703,49 +792,251 @@ export class GameEngine implements EngineLike {
       p.trailClock = 0.045
     }
     p.trail = p.trail.filter((d) => this.time - d.t < 1.2)
+
+    // icy skid streaks while sliding fast with no input (THE GRIP)
+    this.skidClock -= dt
+    if (
+      this.gripLost &&
+      dir === 0 &&
+      Math.abs(p.vx) > 240 &&
+      !reducedMotion() &&
+      this.skidClock <= 0
+    ) {
+      this.skids.push({ x: p.x + p.w / 2, y: p.y + p.h - 2, t: this.time })
+      this.skidClock = 0.05
+    }
+    this.skids = this.skids.filter((s) => this.time - s.t < 0.5)
+  }
+
+  // ---- sketched planks (RE-INKING) ----------------------------------
+  private updatePlanks(): void {
+    const alive: PlankRT[] = []
+    for (const pl of this.planks) {
+      if (this.time - pl.born < pl.life) alive.push(pl)
+      else this.audio.plankFade() // soft pencil-sweep, no note — too chatty
+    }
+    this.planks = alive
+  }
+
+  /** the keyboard ghost plank, anchored to the player (clamped in-page) */
+  ghostPlankRect(): Rect {
+    const p = this.player
+    const w = GHOST_PLANK_W
+    const x = Math.max(6, Math.min(VIEW_W - 6 - w, p.x + p.w / 2 + this.sketchOffset.x - w / 2))
+    const y = Math.max(30, Math.min(VIEW_H - 16 - PLANK_H, p.y + p.h / 2 + this.sketchOffset.y - PLANK_H / 2))
+    return { x, y, w, h: PLANK_H }
+  }
+
+  /** continuous ghost nudging while the sketch mode is open (A/D/W/S).
+   *  Held keys ALSO keep steering the player — the ghost follows. */
+  private updateSketchNudge(dt: number): void {
+    if (!this.sketchMode) return
+    const nx = (this.held.right ? 1 : 0) - (this.held.left ? 1 : 0)
+    const ny = (this.held.down ? 1 : 0) - (this.held.up ? 1 : 0)
+    this.sketchOffset.x = Math.max(-160, Math.min(160, this.sketchOffset.x + nx * 240 * dt))
+    this.sketchOffset.y = Math.max(-90, Math.min(90, this.sketchOffset.y + ny * 150 * dt))
+  }
+
+  private enterSketch(): void {
+    if (this.ink <= 0) {
+      this.pushNote('no ink to draw with.', '#a2611c')
+      this.audio.pinDenied()
+      return
+    }
+    this.sketchMode = true
+    this.sketchOffset = { x: 40 * this.player.facing, y: 0 }
+    this.audio.sketchStart()
+  }
+
+  private exitSketch(): void {
+    this.sketchMode = false
+  }
+
+  private placeSketchKeyboard(): void {
+    if (this.ink <= 0) {
+      this.pushNote('no ink to draw with.', '#a2611c')
+      this.audio.pinDenied()
+      this.exitSketch()
+      return
+    }
+    const r = this.ghostPlankRect()
+    this.createPlank(r.x, r.y, r.w)
+    this.audio.plankPlace()
+  }
+
+  // ---- mouse drag → plank -------------------------------------------
+  private sketchDragStart(x: number, y: number): void {
+    if (this.sketchMode) this.exitSketch() // the mouse takes over
+    this.drag = { active: true, x0: x, y0: y, x1: x, y1: y }
+    this.audio.sketchStart()
+    if (this.ink > 0) this.audio.startSketchLoop()
+  }
+
+  private sketchDragMove(x: number, y: number): void {
+    if (!this.drag) return
+    this.drag.x1 = x
+    this.drag.y1 = y
+  }
+
+  private sketchDragEnd(x: number, y: number): void {
+    const d = this.drag
+    this.drag = null
+    this.audio.stopSketchLoop()
+    if (!d || this.status !== 'playing') return
+    const len = Math.hypot(x - d.x0, y - d.y0)
+    if (len < PLANK_DRAG_MIN) return // a short click — nothing drawn
+    if (this.ink <= 0) {
+      this.pushNote('no ink to draw with.', '#a2611c')
+      this.audio.pinDenied()
+      return
+    }
+    const r = this.strokeToPlankRect(d.x0, d.y0, x, y)
+    this.createPlank(r.x, r.y, r.w)
+    this.audio.plankPlace()
+  }
+
+  /** Simplify a stroke to its endpoints, clamp the slope to ~29° and
+   *  the width to [60,240] — planks are always walkable AABBs. */
+  strokeToPlankRect(x0: number, y0: number, x1: number, y1: number): Rect {
+    let xa = x0
+    let ya = y0
+    let xb = x1
+    let yb = y1
+    if (xa > xb) {
+      ;[xa, xb] = [xb, xa]
+      ;[ya, yb] = [yb, ya]
+    }
+    const dx = Math.max(1, xb - xa)
+    const maxDy = dx * PLANK_MAX_SLOPE
+    const dy = Math.max(-maxDy, Math.min(maxDy, yb - ya))
+    const w = Math.max(PLANK_MIN_W, Math.min(PLANK_MAX_W, dx))
+    const x = Math.max(6, Math.min(VIEW_W - 6 - w, xa))
+    const y = Math.max(30, Math.min(VIEW_H - 16 - PLANK_H, Math.min(ya, ya + dy)))
+    return { x, y, w, h: PLANK_H }
+  }
+
+  private createPlank(x: number, y: number, w: number): void {
+    this.ink--
+    this.stats.planksDrawn++
+    this.planks.push({
+      id: `plank-${++this.plankSeq}`,
+      x,
+      y,
+      w,
+      h: PLANK_H,
+      born: this.time,
+      life: PLANK_LIFE,
+    })
+    // soft cap: the 4th plank erases the oldest early
+    if (this.planks.length > SKETCH_MAX_PLANKS) {
+      this.planks.shift()
+      this.audio.plankFade()
+    }
+    this.bumpUi()
+  }
+
+  // ---- THE NAMING label drift -----------------------------------------
+  /** EngineLike: begin the label's wander (deterministic anchors off
+   *  the exit door — one needs a deliberate jump, one a full jump up,
+   *  one a short walk; all within ~150px of the door). */
+  startLabelDrift(): void {
+    const e = this.exitRect
+    const c = (x: number, y: number): Vec => ({ x: x - LABEL_W / 2, y: y - LABEL_H / 2 })
+    this.labelAnchors = [
+      c(e.x - 60, e.y + 10), // off the ledge's left edge
+      c(e.x + e.w + 40, e.y + 24), // beside the door, on the ledge
+      c(e.x + e.w / 2, e.y - 55), // straight above the door
+    ]
+    this.labelDriftT0 = this.time
+    this.labelRect = {
+      x: this.labelAnchors[0].x,
+      y: this.labelAnchors[0].y,
+      w: LABEL_W,
+      h: LABEL_H,
+    }
+  }
+
+  /** EngineLike: re-attach the label above the door. */
+  endLabelDrift(): void {
+    this.labelAnchors = []
+    const e = this.exitRect
+    this.labelRect = { x: e.x + e.w / 2 - LABEL_W / 2, y: e.y - LABEL_H - 8, w: LABEL_W, h: LABEL_H }
+  }
+
+  private updateLabel(): void {
+    if (!this.namingLost || this.labelAnchors.length === 0) return
+    const n = this.labelAnchors.length
+    const ph = (this.time - this.labelDriftT0) / LABEL_LEG_S
+    const i = Math.floor(ph) % n
+    const j = (i + 1) % n
+    let k = ph - Math.floor(ph)
+    k = k * k * (3 - 2 * k) // smoothstep — no corners
+    const a = this.labelAnchors[i]
+    const b = this.labelAnchors[j]
+    const rm = reducedMotion()
+    this.labelRect.x = a.x + (b.x - a.x) * k + (rm ? 0 : Math.sin(this.time * 1.7) * 3)
+    this.labelRect.y = a.y + (b.y - a.y) * k + (rm ? 0 : Math.sin(this.time * 2.6) * 4)
   }
 
   private resolveX(p: PlayerRT): void {
     for (const pl of this.platforms) {
       if (!pl.solid) continue
-      if (
-        p.x < pl.x + pl.w &&
-        p.x + p.w > pl.x &&
-        p.y < pl.y + pl.h &&
-        p.y + p.h > pl.y
-      ) {
-        if (p.vx > 0) p.x = pl.x - p.w
-        else if (p.vx < 0) p.x = pl.x + pl.w
-        else {
-          // squeezed by a drifting platform — pop out the shallow side
-          const penL = p.x + p.w - pl.x
-          const penR = pl.x + pl.w - p.x
-          if (penL < penR) p.x = pl.x - p.w
-          else p.x = pl.x + pl.w
-        }
-        p.vx = 0
+      this.pushOutX(p, pl)
+    }
+    // sketched planks are always solid (never targeted by distortions)
+    for (const pl of this.planks) this.pushOutX(p, pl)
+  }
+
+  private pushOutX(
+    p: PlayerRT,
+    pl: { x: number; y: number; w: number; h: number },
+  ): void {
+    if (
+      p.x < pl.x + pl.w &&
+      p.x + p.w > pl.x &&
+      p.y < pl.y + pl.h &&
+      p.y + p.h > pl.y
+    ) {
+      if (p.vx > 0) p.x = pl.x - p.w
+      else if (p.vx < 0) p.x = pl.x + pl.w
+      else {
+        // squeezed by a drifting platform — pop out the shallow side
+        const penL = p.x + p.w - pl.x
+        const penR = pl.x + pl.w - p.x
+        if (penL < penR) p.x = pl.x - p.w
+        else p.x = pl.x + pl.w
       }
+      p.vx = 0
     }
   }
 
   private resolveY(p: PlayerRT): void {
     for (const pl of this.platforms) {
       if (!pl.solid) continue
-      if (
-        p.x < pl.x + pl.w &&
-        p.x + p.w > pl.x &&
-        p.y < pl.y + pl.h &&
-        p.y + p.h > pl.y
-      ) {
-        if (p.vy > 0) {
-          p.y = pl.y - p.h
-          p.vy = 0
-          p.grounded = true
-          p.groundId = pl.id
-        } else if (p.vy < 0) {
-          p.y = pl.y + pl.h
-          p.vy = 0
-        }
+      this.landOn(p, pl)
+    }
+    // sketched planks are always solid (never targeted by distortions)
+    for (const pl of this.planks) this.landOn(p, pl)
+  }
+
+  private landOn(
+    p: PlayerRT,
+    pl: { x: number; y: number; w: number; h: number; id: string },
+  ): void {
+    if (
+      p.x < pl.x + pl.w &&
+      p.x + p.w > pl.x &&
+      p.y < pl.y + pl.h &&
+      p.y + p.h > pl.y
+    ) {
+      if (p.vy > 0) {
+        p.y = pl.y - p.h
+        p.vy = 0
+        p.grounded = true
+        p.groundId = pl.id
+      } else if (p.vy < 0) {
+        p.y = pl.y + pl.h
+        p.vy = 0
       }
     }
   }
@@ -769,9 +1060,46 @@ export class GameEngine implements EngineLike {
       this.pushNote('anchored.', '#a2611c')
     }
 
-    // exit door
+    // ink bottles (RE-INKING): +1 carried ink, until the page reloads
+    const pcx = p.x + p.w / 2
+    const pcy = p.y + p.h / 2
+    for (const d of this.inkDrops) {
+      if (d.taken) continue
+      if (this.ink >= INK_MAX) break // bottles wait until you have room
+      if (Math.hypot(pcx - d.at.x, pcy - d.at.y) < 30) {
+        d.taken = true
+        this.ink++
+        this.stats.inkCollected++
+        this.pushNote('+1 ink.', '#a2611c')
+        this.audio.inkPickup()
+        this.bumpUi()
+      }
+    }
+
+    // THE NAMING rescue: touch the wandering word to re-ink the door.
+    // Deliberate but always optional — auto-restore still comes in ≤7s.
+    if (this.namingLost) {
+      const lr = this.labelRect
+      const pad = 6
+      if (
+        p.x < lr.x + lr.w + pad &&
+        p.x + p.w > lr.x - pad &&
+        p.y < lr.y + lr.h + pad &&
+        p.y + p.h > lr.y - pad
+      ) {
+        const rt = this.rules.get('naming')
+        if (rt && rt.phase === 'forgotten') {
+          this.restoreRule(rt, false) // same path as auto-restore…
+          this.pushNote('re-inked.', RULES.naming.color) // …but say what happened
+          this.audio.reInk()
+        }
+      }
+    }
+
+    // exit door — INERT while the name is forgotten
     const e = this.exitRect
     if (
+      !this.namingLost &&
       p.x < e.x + e.w &&
       p.x + p.w > e.x &&
       p.y < e.y + e.h &&
@@ -785,7 +1113,7 @@ export class GameEngine implements EngineLike {
     if (p.y > VIEW_H + 80) this.startDead()
   }
 
-  /** room 5 set piece: near the end of the climb, it panics */
+  /** final-page set piece: near the end of the climb, it panics */
   private checkScript(): void {
     const sc = this.roomDef.script
     if (!sc || this.scriptFired || this.scriptQueue.length > 0) return
@@ -804,6 +1132,9 @@ export class GameEngine implements EngineLike {
     this.transitionDur = DEAD_DUR
     this.stats.erased++
     this.audio.stopWaver()
+    this.audio.stopSketchLoop()
+    this.sketchMode = false
+    this.drag = null
     this.audio.erased()
     this.bumpUi()
   }
@@ -842,6 +1173,9 @@ export class GameEngine implements EngineLike {
     this.switched = false
     this.stats.pagesCleared++
     this.audio.stopWaver()
+    this.audio.stopSketchLoop()
+    this.sketchMode = false
+    this.drag = null
     this.audio.roomClear()
     this.bumpUi()
   }
@@ -910,6 +1244,20 @@ export class GameEngine implements EngineLike {
     this.inputInverted = false
     this.jumpFactor = 1
     this.coyoteDisabled = false
+    this.gripLost = false
+    this.namingLost = false
+    this.labelAnchors = []
+    this.endLabelDrift()
+    // RE-INKING state is page-scoped: a fresh page is blank paper
+    this.ink = 0
+    this.inkDrops = rd.inkDrops.map((at) => ({ at: { ...at }, taken: false }))
+    this.planks = []
+    this.plankSeq = 0
+    this.sketchMode = false
+    this.sketchOffset = { x: 40, y: 0 }
+    this.drag = null
+    this.skids = []
+    this.skidClock = 0
     this.player = makePlayer(rd.spawn)
     this.observer.resetRoom()
     this.bumpUi()
@@ -974,5 +1322,16 @@ export class GameEngine implements EngineLike {
   // EngineLike requirement used by rules.ts distortions
   rand(): number {
     return Math.random()
+  }
+
+  // ---- dev/test helpers (debug hook + headless sims; harmless live) ----
+  /** Force a rule's warning as if the scheduler had picked it. */
+  debugStartWarning(id: RuleId): void {
+    this.startWarning(id)
+  }
+
+  /** Top up carried ink (defaults to full). */
+  debugGrantInk(n: number = INK_MAX): void {
+    this.ink = Math.max(0, Math.min(INK_MAX, n))
   }
 }

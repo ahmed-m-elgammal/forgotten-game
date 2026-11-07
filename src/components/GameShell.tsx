@@ -28,7 +28,7 @@ const INITIAL_UI: UiSnapshot = {
   version: 0,
   status: 'title',
   roomIndex: 0,
-  roomCount: 5,
+  roomCount: 7,
   roomName: '',
   roomSubtitle: '',
   charges: 0,
@@ -36,6 +36,8 @@ const INITIAL_UI: UiSnapshot = {
   slots: 0,
   pinnedCount: 0,
   erased: 0,
+  ink: 0,
+  inkMax: 3,
   muted: false,
   legendOpen: false,
   selectedRule: null,
@@ -55,7 +57,7 @@ export default function GameShell() {
     if (!ctx) return
 
     const audio = new AudioEngine()
-    const held = { left: false, right: false }
+    const held = { left: false, right: false, up: false, down: false }
     const engine = new GameEngine(audio, held)
     engineRef.current = engine
     // Debug / modding hook (dev builds only): lets tools and tinkerers
@@ -69,11 +71,17 @@ export default function GameShell() {
       action: (a) => engine.pressAction(a),
       pointerMove: (x, y) => engine.pointerMove(x, y),
       pointerDown: (x, y) => engine.pointerDown(x, y),
+      pointerUp: (x, y) => engine.pointerUp(x, y),
       blur: () => engine.onBlur(),
       setHeld: (l, r) => {
         held.left = l
         held.right = r
       },
+      setHeldUD: (u, d) => {
+        held.up = u
+        held.down = d
+      },
+      sketchActive: () => engine.sketchMode,
       unlock: () => engine.unlockAudio(),
     })
 
@@ -175,8 +183,8 @@ export default function GameShell() {
               </button>
             </div>
             <p className="mt-5 text-xs opacity-60">
-              ENTER to begin · ←/→ or A/D move · SPACE jump · 1–5 select a rule · ENTER keeps it ·
-              sound starts after your first key or click
+              ENTER to begin · ←/→ or A/D move · SPACE jump · 1–7 select a rule · ENTER keeps it ·
+              C sketch · sound starts after your first key or click
             </p>
           </div>
         </div>
@@ -233,6 +241,9 @@ export default function GameShell() {
                 <Stat label="pages cleared" value={`${ui.stats.pagesCleared} / ${ui.roomCount}`} />
                 <Stat label="times erased" value={`${ui.stats.erased}`} />
                 <Stat label="jumps" value={`${ui.stats.jumps}`} />
+                {ui.stats.planksDrawn > 0 && (
+                  <Stat label="lines drawn" value={`${ui.stats.planksDrawn}`} />
+                )}
                 {ui.stats.topKept && (
                   <Stat
                     label="top kept rule"
@@ -304,7 +315,7 @@ export default function GameShell() {
               </li>
             </ul>
             <h4 style={HAND} className="mt-5 text-lg">
-              the five rules
+              the {Object.keys(RULES).length} rules
             </h4>
             <ul className="mt-2 grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">
               {(Object.keys(RULES) as RuleId[]).map((id) => (
@@ -318,6 +329,26 @@ export default function GameShell() {
                   </span>
                 </li>
               ))}
+            </ul>
+            <h4 style={HAND} className="mt-5 text-lg">
+              ink &amp; sketching
+            </h4>
+            <ul className="mt-2 space-y-1 text-sm">
+              <li>
+                <b>ink bottles</b> refill your pen — three swallows max, gone when the page
+                reloads.
+              </li>
+              <li>
+                <b>draw a plank:</b> hold left-click and drag a line — or press C, aim the ghost
+                with A/D/W/S, ENTER places it.
+              </li>
+              <li>
+                <b>planks dry out</b> in about 8 seconds, then fade. Three can exist at once.
+              </li>
+              <li>
+                <b>THE NAMING:</b> a nameless door won&apos;t open — touch its wandering word to
+                re-ink it.
+              </li>
             </ul>
             <p className="mt-4 text-xs opacity-60">
               Falling off the page is never the end: you are erased back to your last anchor. R

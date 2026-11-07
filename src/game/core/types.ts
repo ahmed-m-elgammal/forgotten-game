@@ -19,6 +19,8 @@ export type RuleId =
   | 'platforms'
   | 'direction'
   | 'jump'
+  | 'grip'
+  | 'naming'
 
 export type RulePhase = 'stable' | 'warned' | 'forgotten'
 
@@ -51,6 +53,20 @@ export interface PlatformDef {
   h: number
   kind: 'floor' | 'ledge' // floors can NEVER be made passable by SOLIDITY
   noDistort?: boolean // e.g. the platform carrying the exit door in room 5
+}
+
+/** A hand-drawn plank the player sketched with ink (RE-INKING).
+ *  Purely a solid AABB with a drying timer — it never moves, is
+ *  never targeted by other rules' distortions, and never counts
+ *  as an Observer perch habit. */
+export interface PlankRT {
+  id: string
+  x: number
+  y: number
+  w: number
+  h: number
+  born: number // engine time when it was drawn
+  life: number // seconds before it dries out and fades
 }
 
 /** Live platform state the simulation mutates each frame. */
@@ -133,6 +149,8 @@ export interface RunStats {
   jumps: number
   forgotten: Record<RuleId, number>
   totalPins: number
+  planksDrawn: number
+  inkCollected: number
 }
 
 export interface UiStats {
@@ -141,6 +159,8 @@ export interface UiStats {
   jumps: number
   forgotten: Record<RuleId, number>
   topKept: { rule: RuleId; count: number } | null
+  planksDrawn: number
+  inkCollected: number
 }
 
 /** What the engine tells React, once per UI-relevant change. */
@@ -156,6 +176,8 @@ export interface UiSnapshot {
   slots: number
   pinnedCount: number
   erased: number
+  ink: number
+  inkMax: number
   muted: boolean
   legendOpen: boolean
   selectedRule: RuleId | null
@@ -180,6 +202,7 @@ export interface RoomDef {
   eventInterval: [number, number]
   warnDuration: number // seconds of telegraphing (room 1 is longer)
   introNotes: string[] // staggered handwritten lines when the page opens
+  inkDrops: Vec[] // collectible ink bottles for sketching (RE-INKING)
   script?: {
     // optional late-page set piece (room 5): when the player is deep
     // in the climb (x > whenX and y < whenYMax), warn these rules in
@@ -200,8 +223,15 @@ export interface EngineLike {
   inputInverted: boolean
   jumpFactor: number
   coyoteDisabled: boolean
+  gripLost: boolean // THE GRIP forgotten: icy friction
+  namingLost: boolean // THE NAMING forgotten: door inert, label adrift
   rand(): number
   platformById(id: string): PlatformRT | undefined
+  /** begin/end the OUT? label's wander (THE NAMING distortion).
+   *  WHY methods: the anchor geometry is derived from the exit door,
+   *  which only the engine knows. */
+  startLabelDrift(): void
+  endLabelDrift(): void
 }
 
 // ---- physics tuning (px, seconds) --------------------------------
@@ -216,6 +246,25 @@ export const COYOTE = 0.1
 export const JUMP_BUFFER = 0.12
 export const PLAYER_W = 22
 export const PLAYER_H = 30
+
+// ---- THE GRIP tuning (icy friction) --------------------------------
+// While gripLost: pushing accelerates weakly up to GRIP_TOP_SPEED
+// (a touch above MOVE_SPEED — momentum), releasing does NOT brake:
+// only a tiny drag applies. Stop early. Start slow.
+export const GRIP_ACCEL = 850 // px/s² while input held (was 2600)
+export const GRIP_TOP_SPEED = 390 // |vx| clamp while sliding
+export const GRIP_DRAG = 0.12 // exponential vx decay per second, released
+
+// ---- RE-INKING tuning (sketched planks) ----------------------------
+export const INK_MAX = 3 // carried ink capacity
+export const PLANK_LIFE = 8 // seconds before a drawn plank dries away
+export const PLANK_H = 12
+export const PLANK_MIN_W = 60
+export const PLANK_MAX_W = 240
+export const PLANK_MAX_SLOPE = 0.55 // ~29° — planks stay walkable
+export const PLANK_DRAG_MIN = 40 // min mouse-stroke length to draw
+export const SKETCH_MAX_PLANKS = 3 // placing a 4th erases the oldest
+export const GHOST_PLANK_W = 110 // keyboard ghost plank width
 
 // ---- memory economy tuning ---------------------------------------
 export const PIN_DURATION = 12 // a kept rule is immune for this long

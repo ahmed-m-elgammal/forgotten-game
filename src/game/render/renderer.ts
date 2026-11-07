@@ -9,7 +9,7 @@
 // ============================================================
 import type { GameEngine } from '../core/engine'
 import type { PlatformRT, RuleId } from '../core/types'
-import { TOKEN_R, VIEW_H, VIEW_W } from '../core/types'
+import { INK_MAX, TOKEN_R, VIEW_H, VIEW_W } from '../core/types'
 import { RULES } from '../core/rules'
 import {
   AMBER,
@@ -26,6 +26,7 @@ import {
   makeGrainTile,
   reducedMotion,
   roundedRectPath,
+  sRand,
   scribbleOver,
   wobblyLine,
   wobblyRect,
@@ -88,9 +89,13 @@ export class Renderer {
 
     this.exitDoor(ctx, eng)
     this.platforms(ctx, eng, warnMap)
+    this.inkBottles(ctx, eng)
+    this.planks(ctx, eng)
     this.checkpoint(ctx, eng)
     this.trail(ctx, eng)
+    this.skids(ctx, eng)
     this.player(ctx, eng)
+    this.sketchOverlay(ctx, eng)
     this.ambients(ctx, eng)
     this.tokens(ctx, eng)
     this.hud(ctx, eng)
@@ -148,6 +153,8 @@ export class Renderer {
     warnMap: Map<string, RuleId>,
   ): void {
     const time = eng.time
+    const gripRT = eng.rules.get('grip')
+    const gripGone = !!gripRT && gripRT.phase === 'forgotten'
     for (const p of eng.platforms) {
       if (p.drift) {
         // THE GROUND forgot this one: ghost of where it just was
@@ -169,6 +176,20 @@ export class Renderer {
       ctx.strokeStyle = INK
       ctx.lineWidth = 2.2
       wobblyRect(ctx, p.x, p.y, p.w, p.h, 5, time, 1.2)
+
+      // THE GRIP forgotten: pale hatched shine streaks — the page is ice
+      if (gripGone) {
+        ctx.save()
+        ctx.strokeStyle = 'rgba(255,255,255,0.6)'
+        ctx.lineWidth = 2
+        const nShine = p.w > 200 ? 3 : 2
+        for (let i = 0; i < nShine; i++) {
+          const sx = p.x + 10 + sRand(i * 13.7 + p.x) * Math.max(10, p.w - 70)
+          const sw = 22 + sRand(i * 7.9 + p.y) * 30
+          wobblyLine(ctx, sx, p.y + 4, sx + sw, p.y + 4.5, 40 + i, time, 0.9)
+        }
+        ctx.restore()
+      }
 
       // amber hatch + countdown while this platform is telegraphed
       const wr = warnMap.get(p.id)
@@ -201,39 +222,165 @@ export class Renderer {
     }
   }
 
-  // ---- exit door ---------------------------------------------------------
+  // ---- ink bottles (RE-INKING pickups) -----------------------------------
+  private inkBottles(ctx: CanvasRenderingContext2D, eng: GameEngine): void {
+    const time = eng.time
+    for (const d of eng.inkDrops) {
+      if (d.taken) continue
+      const bob = reducedMotion() ? 0 : Math.sin(time * 2 + d.at.x * 0.05) * 2
+      const x = d.at.x
+      const y = d.at.y + bob
+      // soft attention ring
+      ctx.save()
+      ctx.globalAlpha = 0.16 + 0.1 * Math.sin(time * 2.4 + d.at.x)
+      ctx.strokeStyle = INK
+      ctx.lineWidth = 1.6
+      ctx.beginPath()
+      ctx.arc(x, y, 15, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.restore()
+      // little bottle: body, neck, cork, wet ink level
+      ctx.save()
+      ctx.strokeStyle = INK
+      ctx.lineWidth = 1.8
+      wobblyRect(ctx, x - 6, y - 3, 12, 11, 77, time, 0.7)
+      wobblyLine(ctx, x - 3, y - 3, x - 3, y - 8, 78, time, 0.4)
+      wobblyLine(ctx, x + 3, y - 3, x + 3, y - 8, 79, time, 0.4)
+      wobblyLine(ctx, x - 4.5, y - 8, x + 4.5, y - 8, 80, time, 0.4)
+      ctx.fillStyle = INK
+      wobblyRectPath(ctx, x - 4, y + 2, 8, 5, 81, time, 0.5)
+      ctx.fill()
+      ctx.restore()
+    }
+  }
+
+  // ---- sketched planks: fresh glossy ink → dries → blinks → fades ------
+  private planks(ctx: CanvasRenderingContext2D, eng: GameEngine): void {
+    const time = eng.time
+    for (const pl of eng.planks) {
+      const age = time - pl.born
+      const left = pl.life - age
+      const dry = Math.max(0, Math.min(1, age / pl.life)) // 0 wet → 1 dry
+      const blinking = left < 2
+      ctx.save()
+      ctx.globalAlpha = blinking ? 0.55 + 0.45 * Math.sin(time * 12) : 1
+      // wet ink body — lightens as it dries
+      ctx.fillStyle = '#1c1813'
+      ctx.globalAlpha *= 1 - dry * 0.5
+      wobblyRectPath(ctx, pl.x, pl.y, pl.w, pl.h, 4, time, 1)
+      ctx.fill()
+      // hand-drawn double line along the top edge (the "drawn" look)
+      ctx.globalAlpha = blinking ? 0.55 + 0.45 * Math.sin(time * 12) : 1
+      ctx.strokeStyle = INK
+      ctx.lineWidth = 2
+      wobblyLine(ctx, pl.x + 2, pl.y + 3.5, pl.x + pl.w - 2, pl.y + 3, 45, time, 0.9)
+      ctx.lineWidth = 1.2
+      wobblyLine(ctx, pl.x + 2, pl.y + 8.5, pl.x + pl.w - 2, pl.y + 9, 46, time, 0.9)
+      // final 2s: dashed outline says "about to go"
+      if (blinking) {
+        ctx.setLineDash([5, 4])
+        ctx.lineWidth = 1.4
+        ctx.strokeStyle = 'rgba(43,38,32,0.6)'
+        ctx.strokeRect(pl.x - 2, pl.y - 2, pl.w + 4, pl.h + 4)
+        ctx.setLineDash([])
+      }
+      ctx.restore()
+    }
+  }
+
+  // ---- exit door (state-aware: THE NAMING) --------------------------------
+  /** the OUT? word-tag: paper chip + handwriting + wavy underline */
+  private drawLabel(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    time: number,
+    rot: number,
+    alpha: number,
+  ): void {
+    ctx.save()
+    ctx.translate(x + 28, y + 10)
+    ctx.rotate(rot)
+    ctx.fillStyle = 'rgba(245,236,217,0.95)'
+    roundedRectPath(ctx, -28, -10, 56, 20, 5)
+    ctx.fill()
+    ctx.strokeStyle = INK
+    ctx.lineWidth = 1.6
+    roundedRectPath(ctx, -28, -10, 56, 20, 5)
+    ctx.stroke()
+    handText(ctx, 'OUT?', 0, -1, 13, { align: 'center', seed: 31, time, alpha })
+    // wavy baseline under the word
+    wobblyLine(ctx, -16, 5.5, 16, 5.5, 33, time, 0.7)
+    ctx.restore()
+  }
+
   private exitDoor(ctx: CanvasRenderingContext2D, eng: GameEngine): void {
     const e = eng.exitRect
     const time = eng.time
+    const namingRT = eng.rules.get('naming')
+    const namingWarned = !!namingRT && namingRT.phase === 'warned'
+    const namingGone = eng.namingLost
     const pulse = 0.5 + 0.5 * Math.sin(time * 2.2)
-    ctx.save()
-    // hatched glow halo
-    for (let i = 2; i >= 0; i--) {
-      ctx.globalAlpha = (0.08 + 0.07 * pulse) * (1 - i * 0.22)
-      ctx.strokeStyle = '#b6452c'
-      ctx.lineWidth = 2
-      wobblyRect(ctx, e.x - 6 - i * 7, e.y - 6 - i * 7, e.w + 12 + i * 14, e.h + 12 + i * 14, 21 + i, time, 1.5)
+    if (!namingGone) {
+      ctx.save()
+      // hatched glow halo
+      for (let i = 2; i >= 0; i--) {
+        ctx.globalAlpha = (0.08 + 0.07 * pulse) * (1 - i * 0.22)
+        ctx.strokeStyle = '#b6452c'
+        ctx.lineWidth = 2
+        wobblyRect(ctx, e.x - 6 - i * 7, e.y - 6 - i * 7, e.w + 12 + i * 14, e.h + 12 + i * 14, 21 + i, time, 1.5)
+      }
+      ctx.restore()
     }
-    ctx.restore()
-    // door
-    ctx.fillStyle = 'rgba(231,217,184,0.85)'
-    wobblyRectPath(ctx, e.x, e.y, e.w, e.h, 20, time, 1.4)
-    ctx.fill()
-    ctx.strokeStyle = INK
-    ctx.lineWidth = 2.6
-    wobblyRect(ctx, e.x, e.y, e.w, e.h, 20, time, 1.4)
-    ctx.lineWidth = 1.6
-    wobblyRect(ctx, e.x + 10, e.y + 12, e.w - 20, e.h - 26, 24, time, 1)
-    ctx.fillStyle = INK
-    ctx.beginPath()
-    ctx.arc(e.x + e.w - 14, e.y + e.h * 0.55, 3, 0, Math.PI * 2)
-    ctx.fill()
-    handText(ctx, 'OUT?', e.x + e.w / 2, e.y - 12, 15, {
-      align: 'center',
-      seed: 30,
-      time,
-      alpha: 0.85,
-    })
+    if (namingGone) {
+      // the door forgot what it is: faint dashed blank outline + "?"
+      ctx.save()
+      dashRect(ctx, e.x, e.y, e.w, e.h, 20, time, 'rgba(43,38,32,0.45)', 0.7)
+      handText(ctx, '?', e.x + e.w / 2, e.y + e.h / 2 + 10, 30, {
+        align: 'center',
+        alpha: 0.5 + 0.15 * Math.sin(time * 3),
+        seed: 34,
+        time,
+      })
+      ctx.restore()
+    } else {
+      // door
+      ctx.fillStyle = 'rgba(231,217,184,0.85)'
+      wobblyRectPath(ctx, e.x, e.y, e.w, e.h, 20, time, 1.4)
+      ctx.fill()
+      ctx.strokeStyle = INK
+      ctx.lineWidth = 2.6
+      wobblyRect(ctx, e.x, e.y, e.w, e.h, 20, time, 1.4)
+      ctx.lineWidth = 1.6
+      wobblyRect(ctx, e.x + 10, e.y + 12, e.w - 20, e.h - 26, 24, time, 1)
+      ctx.fillStyle = INK
+      ctx.beginPath()
+      ctx.arc(e.x + e.w - 14, e.y + e.h * 0.55, 3, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    // the label: attached / jittering / adrift
+    if (namingGone) {
+      // faint dotted tether so the word still reads as the door's
+      ctx.save()
+      ctx.strokeStyle = RULES.naming.color
+      ctx.globalAlpha = 0.4
+      ctx.lineWidth = 1.4
+      ctx.setLineDash([3, 5])
+      ctx.beginPath()
+      ctx.moveTo(e.x + e.w / 2, e.y + 8)
+      ctx.lineTo(eng.labelRect.x + eng.labelRect.w / 2, eng.labelRect.y + eng.labelRect.h / 2)
+      ctx.stroke()
+      ctx.restore()
+      const wob = reducedMotion() ? 0 : Math.sin(time * 1.9) * 0.06
+      this.drawLabel(ctx, eng.labelRect.x, eng.labelRect.y, time, wob, 0.95)
+    } else if (namingWarned) {
+      // jitters toward the door edge — the name is slipping
+      const jx = reducedMotion() ? 0 : Math.sin(time * 17) * 3
+      const jy = reducedMotion() ? 0 : Math.abs(Math.sin(time * 23)) * 3
+      this.drawLabel(ctx, e.x + e.w / 2 - 28 + jx, e.y - 30 + jy, time, 0.05, 0.9)
+    } else {
+      this.drawLabel(ctx, e.x + e.w / 2 - 28, e.y - 30, time, 0, 0.85)
+    }
   }
 
   // ---- checkpoint (ink anchor knot) ---------------------------------------
@@ -307,6 +454,23 @@ export class Renderer {
     ctx.globalAlpha = 1
   }
 
+  /** icy skid streaks left behind while sliding (THE GRIP) */
+  private skids(ctx: CanvasRenderingContext2D, eng: GameEngine): void {
+    if (reducedMotion()) return
+    const time = eng.time
+    ctx.save()
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)'
+    ctx.lineWidth = 2
+    ctx.lineCap = 'round'
+    for (const s of eng.skids) {
+      const age = time - s.t
+      const a = Math.max(0, 1 - age / 0.5) * 0.7
+      ctx.globalAlpha = a
+      wobblyLine(ctx, s.x - 7, s.y, s.x + 7, s.y - 1, 55 + Math.floor(s.t * 10), time, 0.6)
+    }
+    ctx.restore()
+  }
+
   private player(ctx: CanvasRenderingContext2D, eng: GameEngine): void {
     const p = eng.player
     const time = eng.time
@@ -360,6 +524,61 @@ export class Renderer {
     ctx.arc(ex + 2.2, -26, 1.1, 0, Math.PI * 2)
     ctx.fill()
     ctx.restore()
+  }
+
+  // ---- sketch overlay: live stroke + keyboard ghost plank -----------------
+  private sketchOverlay(ctx: CanvasRenderingContext2D, eng: GameEngine): void {
+    const time = eng.time
+    if (eng.drag) {
+      const d = eng.drag
+      ctx.save()
+      // the live stroke
+      ctx.strokeStyle = INK
+      ctx.lineWidth = 2.6
+      ctx.lineCap = 'round'
+      ctx.globalAlpha = 0.75
+      wobblyLine(ctx, d.x0, d.y0, d.x1, d.y1, 171, time, 1)
+      ctx.fillStyle = INK
+      ctx.beginPath()
+      ctx.arc(d.x0, d.y0, 2.4, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.beginPath()
+      ctx.arc(d.x1, d.y1, 2.4, 0, Math.PI * 2)
+      ctx.fill()
+      // where the plank will actually land (clamped/walkable)
+      const r = eng.strokeToPlankRect(d.x0, d.y0, d.x1, d.y1)
+      ctx.setLineDash([5, 4])
+      ctx.lineWidth = 1.4
+      ctx.globalAlpha = 0.5
+      ctx.strokeStyle = INK
+      ctx.strokeRect(r.x, r.y, r.w, r.h)
+      ctx.setLineDash([])
+      ctx.restore()
+    } else if (eng.sketchMode) {
+      const r = eng.ghostPlankRect()
+      const p = eng.player
+      ctx.save()
+      // dotted anchor from the character's pen hand
+      ctx.strokeStyle = INK
+      ctx.globalAlpha = 0.35
+      ctx.setLineDash([3, 4])
+      ctx.beginPath()
+      ctx.moveTo(p.x + p.w / 2, p.y + p.h / 2)
+      ctx.lineTo(r.x + r.w / 2, r.y + r.h / 2)
+      ctx.stroke()
+      ctx.setLineDash([])
+      // the ghost plank itself
+      ctx.globalAlpha = 0.5 + 0.12 * Math.sin(time * 5)
+      ctx.fillStyle = 'rgba(28,24,19,0.35)'
+      wobblyRectPath(ctx, r.x, r.y, r.w, r.h, 4, time, 1)
+      ctx.fill()
+      ctx.strokeStyle = INK
+      ctx.lineWidth = 1.6
+      ctx.setLineDash([6, 4])
+      wobblyRect(ctx, r.x, r.y, r.w, r.h, 47, time, 1)
+      ctx.setLineDash([])
+      ctx.restore()
+    }
   }
 
   // ---- per-rule ambient & warning FX around the world -------------------------
@@ -425,6 +644,17 @@ export class Renderer {
           hatchRect(ctx, 0, 0, 26, VIEW_H, AMBER, a, 8, 63, time)
           hatchRect(ctx, VIEW_W - 26, 0, 26, VIEW_H, AMBER, a, 8, 64, time)
           this.drawSwapLabels(ctx, eng, true)
+        } else if (id === 'grip') {
+          // hatch the ground under the player's feet in the rule color
+          const groundY = p.y + p.h
+          const a = 0.28 + 0.18 * Math.sin(time * 14)
+          hatchRect(ctx, cx - 44, groundY - 3, 88, 12, def.color, a, 7, 65, time)
+          countdownScribble(ctx, cx, groundY + 30, frac, rt.timer, def.color, 66, time)
+        } else if (id === 'naming') {
+          // hatch the door itself in rose — the name is coming off
+          const a = 0.26 + 0.18 * Math.sin(time * 14)
+          hatchRect(ctx, eng.exitRect.x - 5, eng.exitRect.y - 5, eng.exitRect.w + 10, eng.exitRect.h + 10, def.color, a, 8, 67, time)
+          countdownScribble(ctx, eng.exitRect.x + eng.exitRect.w / 2, eng.exitRect.y - 44, frac, rt.timer, def.color, 68, time)
         }
       } else if (rt.phase === 'forgotten') {
         if (id === 'gravity') {
@@ -455,6 +685,8 @@ export class Renderer {
           hatchRect(ctx, VIEW_W - 30, 0, 30, VIEW_H, def.color, a, 8, 64, time)
           this.drawSwapLabels(ctx, eng, false)
         }
+        // grip-forgotten ice shine is drawn on the platforms themselves;
+        // naming-forgotten door/label states live in exitDoor().
       }
     }
   }
@@ -578,6 +810,22 @@ export class Renderer {
     for (let i = 0; i < eng.slots; i++) {
       clipGlyph(ctx, 96 + i * 20, 72, 14, i < pinned ? '#c98a2d' : 'rgba(43,38,32,0.4)', time)
     }
+    // carried ink: bottle glyph + pips (RE-INKING)
+    const ix = 36 + eng.roomDef.maxCharges * 20 + 22
+    handText(ctx, 'ink', ix - 6, 34, 10.5, { alpha: 0.6, seed: 104, time })
+    ctx.strokeStyle = INK
+    ctx.lineWidth = 1.6
+    wobblyRect(ctx, ix, 44, 11, 11, 82, time, 0.6)
+    wobblyLine(ctx, ix + 3, 44, ix + 3, 39, 83, time, 0.4)
+    wobblyLine(ctx, ix + 8, 44, ix + 8, 39, 84, time, 0.4)
+    for (let i = 0; i < INK_MAX; i++) {
+      ctx.fillStyle = INK
+      ctx.globalAlpha = i < eng.ink ? 0.9 : 0.22
+      ctx.beginPath()
+      ctx.arc(ix + 22 + i * 13, 50, 3.4, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.globalAlpha = 1
     // subtle erased counter
     if (eng.stats.erased > 0) {
       handText(ctx, `erased ×${eng.stats.erased}`, 30, 98, 10, { alpha: 0.45, seed: 102, time })
@@ -706,7 +954,7 @@ export class Renderer {
 
   private hintBar(ctx: CanvasRenderingContext2D, eng: GameEngine): void {
     const text =
-      'A/D move · SPACE jump · 1–5 select · ENTER keep · R restart · ESC pause · M mute'
+      'A/D move · SPACE jump · 1–7 select · ENTER keep · C sketch · R restart · ESC pause · M mute'
     // paper pill so the hint stays legible over the floor slabs
     ctx.save()
     ctx.font = `11px ${HAND_FONT}`
