@@ -1,6 +1,6 @@
 1:"$Sreact.fragment"
-2:I[65763,["/forgotten-game/_next/static/chunks/4b935edd0cea1ee3.js","/forgotten-game/_next/static/chunks/1c577ec45ff4c3f3.js","/forgotten-game/_next/static/chunks/f35e0d78da94dbab.js"],"default"]
-3:I[97367,["/forgotten-game/_next/static/chunks/2f236954d6a65e12.js"],"OutletBoundary"]
+2:I[87562,["/forgotten-game/_next/static/chunks/806b2e51c429f2bf.js","/forgotten-game/_next/static/chunks/dc415a212a43a7d1.js","/forgotten-game/_next/static/chunks/0b323abec86c0a25.js","/forgotten-game/_next/static/chunks/7b5f4d1fd19726bf.js"],"default"]
+3:I[56688,["/forgotten-game/_next/static/chunks/dc245ae8ed249c7a.js"],"OutletBoundary"]
 4:"$Sreact.suspense"
-0:{"buildId":"uK74bb6zxYTRIQ6sqTKWG","rsc":["$","$1","c",{"children":[["$","$L2",null,{}],[["$","script","script-0",{"src":"/forgotten-game/_next/static/chunks/f35e0d78da94dbab.js","async":true}]],["$","$L3",null,{"children":["$","$4",null,{"name":"Next.MetadataOutlet","children":"$@5"}]}]]}],"loading":null,"isPartial":false}
+0:{"buildId":"jbBJR3IzHLrPKzudER-oZ","rsc":["$","$1","c",{"children":[["$","$L2",null,{}],[["$","script","script-0",{"src":"/forgotten-game/_next/static/chunks/0b323abec86c0a25.js","async":true}],["$","script","script-1",{"src":"/forgotten-game/_next/static/chunks/7b5f4d1fd19726bf.js","async":true}]],["$","$L3",null,{"children":["$","$4",null,{"name":"Next.MetadataOutlet","children":"$@5"}]}]]}],"loading":null,"isPartial":false}
 5:null
