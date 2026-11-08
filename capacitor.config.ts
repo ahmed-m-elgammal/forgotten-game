@@ -7,7 +7,7 @@ import type { CapacitorConfig } from '@capacitor/cli'
 const config: CapacitorConfig = {
   appId: 'com.ahmedmelgammal.forgottengame',
   appName: 'The Game That Forgot You',
-  webDir: '.next-store',
+  webDir: 'next-store',
   server: {
     // serve the bundle over https-scheme so WebAudio, canvas and
     // localStorage behave exactly like the deployed site

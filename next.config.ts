@@ -9,12 +9,14 @@ const isPagesExport = process.env.STATIC_EXPORT === "1";
 const isStoreExport = process.env.STORE_EXPORT === "1";
 const isExport = isPagesExport || isStoreExport;
 
+// NOTE: the store dist dir must NOT start with a dot — GitHub Actions'
+// upload-artifact skips "hidden" files/dirs by default.
 const nextConfig: NextConfig = {
   output: isExport ? "export" : "standalone",
   ...(isExport
     ? {
         distDir: isStoreExport
-          ? ".next-store"
+          ? "next-store"
           : process.env.NEXT_DIST_DIR || ".next-export",
         ...(isPagesExport
           ? { basePath: "/forgotten-game", assetPrefix: "/forgotten-game" }

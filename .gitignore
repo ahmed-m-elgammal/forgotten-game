@@ -66,4 +66,4 @@ server.log
 .next-export
 
 # capacitor store export (gitignored; rebuilt in CI)
-.next-store
+next-store

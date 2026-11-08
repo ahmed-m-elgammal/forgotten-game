@@ -21,6 +21,8 @@ def releaseKeyPassword      = envOrProp('ANDROID_KEY_PASSWORD', 'androidKeyPassw
 def appVersionCode          = (envOrProp('APP_VERSION_CODE', 'versionCode') ?: '1').toInteger()
 def appVersionName          = envOrProp('APP_VERSION_NAME', 'versionName') ?: '1.4.0'
 
+def hasKeystore = releaseKeystoreFile != null && file(releaseKeystoreFile).exists()
+
 android {
     namespace = "com.ahmedmelgammal.forgottengame"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -40,7 +42,7 @@ android {
     signingConfigs {
         release {
             // populated only when the keystore is provided (CI secret)
-            if (releaseKeystoreFile != null) {
+            if (hasKeystore) {
                 storeFile file(releaseKeystoreFile)
                 storePassword releaseKeystorePassword
                 keyAlias releaseKeyAlias
@@ -52,7 +54,7 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-            if (releaseKeystoreFile != null) {
+            if (hasKeystore) {
                 signingConfig signingConfigs.release
             }
         }
