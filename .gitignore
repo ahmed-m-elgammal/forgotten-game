@@ -64,3 +64,6 @@ server.log
 /tests
 /skills
 .next-export
+
+# capacitor store export (gitignored; rebuilt in CI)
+.next-store

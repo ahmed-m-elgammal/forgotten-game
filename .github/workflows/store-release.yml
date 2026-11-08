@@ -1,0 +1,269 @@
+# ============================================================
+# store-release — App Store / Play Store build pipeline
+# ------------------------------------------------------------
+# Triggered by: pushing a version tag (v1.4.0, v1.5.0, …) or
+# manually from the Actions tab.
+#
+#   web      → builds the store flavor of the web export
+#   android  → signed .aab + .apk (signs only if the keystore
+#              secrets exist; otherwise produces UNSIGNED builds
+#              for on-device smoke testing)
+#   ios      → .xcarchive → signed .ipa when Apple secrets exist,
+#              otherwise an unsigned archive for opening in Xcode
+#
+# One-time helpers (Actions tab → store-release → Run workflow):
+#   ☐ make-keystore — generates your Android upload keystore and
+#     hands it back as an artifact (base64 it into repo secrets)
+#   ☐ ios-init — runs `cap add ios` on macOS and commits the
+#     ios/ project, so iOS settings persist between releases
+#
+# Required repository secrets (see STORE-LAUNCH.md):
+#   ANDROID_KEYSTORE_B64, ANDROID_KEYSTORE_PASSWORD,
+#   ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+#   APPLE_P12_B64, APPLE_P12_PASSWORD, APPLE_PROFILE_B64,
+#   APPLE_TEAM_ID, KEYCHAIN_PASSWORD
+# ============================================================
+name: store-release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      make_keystore:
+        description: 'One-time: generate the Android upload keystore'
+        type: boolean
+        default: false
+      ios_init:
+        description: 'One-time: create & commit the ios/ project'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: store-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------- web
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Build store export (no base path)
+        run: bun run build:store
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-store
+          path: .next-store
+          retention-days: 14
+
+  # ------------------------------------------------------ android
+  android:
+    needs: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-store
+          path: .next-store
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Decode upload keystore (if secret present)
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_B64" ]; then
+            echo "$ANDROID_KEYSTORE_B64" | base64 -d > android/app/upload-keystore.jks
+            echo "SIGNED=1" >> "$GITHUB_ENV"
+          else
+            echo "### No ANDROID_KEYSTORE_B64 secret — building UNSIGNED release (smoke test only)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Sync web assets into the Android shell
+        run: bunx cap sync android
+      - name: Build release AAB + APK
+        env:
+          ANDROID_KEYSTORE_FILE: ${{ github.workspace }}/android/app/upload-keystore.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          APP_VERSION_CODE: ${{ github.run_number }}
+          APP_VERSION_NAME: ${{ github.ref_name }}
+        run: |
+          cd android
+          ./gradlew :app:bundleRelease :app:assembleRelease \
+            -PversionCode="${APP_VERSION_CODE#v}" -PversionName="${APP_VERSION_NAME#v}" --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-store-${{ github.ref_name }}
+          path: |
+            android/app/build/outputs/bundle/release/*.aab
+            android/app/build/outputs/apk/release/*.apk
+          retention-days: 14
+
+  # ---------------------------------------------------------- ios
+  ios:
+    needs: web
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-store
+          path: .next-store
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Ensure CocoaPods
+        run: command -v pod || sudo gem install cocoapods --no-document
+      - name: Ensure iOS shell exists (generates fresh if not committed yet)
+        run: |
+          if [ ! -d ios ]; then
+            bunx cap add ios
+          fi
+          bunx cap sync ios
+      - name: Stamp version from the tag
+        env:
+          VERSION: ${{ github.ref_name }}
+          RUN_NUM: ${{ github.run_number }}
+        run: |
+          V="${VERSION#v}"
+          cd ios/App
+          sed -i '' "s/MARKETING_VERSION = [0-9.]*;/MARKETING_VERSION = ${V};/g" App.xcodeproj/project.pbxproj
+          sed -i '' "s/CURRENT_PROJECT_VERSION = [0-9]*;/CURRENT_PROJECT_VERSION = ${RUN_NUM};/g" App.xcodeproj/project.pbxproj
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${V}" App/Info.plist || true
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${RUN_NUM}" App/Info.plist || true
+      - name: Import signing assets (if Apple secrets present)
+        env:
+          APPLE_P12_B64: ${{ secrets.APPLE_P12_B64 }}
+          APPLE_P12_PASSWORD: ${{ secrets.APPLE_P12_PASSWORD }}
+          APPLE_PROFILE_B64: ${{ secrets.APPLE_PROFILE_B64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          if [ -n "$APPLE_P12_B64" ] && [ -n "$APPLE_PROFILE_B64" ]; then
+            security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+            security default-keychain -s build.keychain
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+            echo "$APPLE_P12_B64" | base64 --decode > /tmp/cert.p12
+            security import /tmp/cert.p12 -k build.keychain -P "$APPLE_P12_PASSWORD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain >/dev/null
+            echo "$APPLE_PROFILE_B64" | base64 --decode > /tmp/app.mobileprovision
+            UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' /dev/stdin <<< "$(security cms -D -i /tmp/app.mobileprovision)")
+            mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+            cp /tmp/app.mobileprovision "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
+            PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' /dev/stdin <<< "$(security cms -D -i /tmp/app.mobileprovision)")
+            echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
+            echo "SIGNED=1" >> "$GITHUB_ENV"
+          else
+            echo "### No Apple signing secrets — producing an UNSIGNED archive (open it in Xcode, or add secrets for a TestFlight-ready .ipa)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Archive (signed)
+        if: env.SIGNED == '1'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath build/App.xcarchive archive \
+            CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" CODE_SIGN_IDENTITY="Apple Distribution"
+          cat > /tmp/exportOptions.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key><dict>
+              <key>com.ahmedmelgammal.forgottengame</key><string>__PROFILE__</string>
+            </dict>
+          </dict></plist>
+          EOF
+          sed -i '' "s/__PROFILE__/$PROFILE_NAME/" /tmp/exportOptions.plist
+          xcodebuild -exportArchive -archivePath build/App.xcarchive \
+            -exportOptionsPlist /tmp/exportOptions.plist -exportPath build/ipa
+      - name: Archive (unsigned fallback)
+        if: env.SIGNED != '1'
+        run: |
+          xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath build/App-unsigned.xcarchive archive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+          cd build && zip -qry App-unsigned.xcarchive.zip App-unsigned.xcarchive
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-${{ github.ref_name }}
+          path: |
+            build/ipa/*.ipa
+            build/App-unsigned.xcarchive.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  # --------------------- one-time helpers (manual dispatch only) --
+  keystore:
+    if: github.event_name == 'workflow_dispatch' && inputs.make_keystore
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Generate upload keystore
+        env:
+          KS_PASS: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          PASS="${KS_PASS:-changeit-$(date +%s)}"
+          keytool -genkeypair -v -keystore upload-keystore.jks -alias upload \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass "$PASS" -keypass "$PASS" \
+            -dname "CN=The Game That Forgot You, OU=Games, O=ahmed-m-elgammal"
+          echo "### Keystore password used: \`$PASS\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Store it as ANDROID_KEYSTORE_PASSWORD **and** ANDROID_KEY_PASSWORD secrets, then DELETE this run's logs." >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: upload-keystore
+          path: upload-keystore.jks
+          retention-days: 7
+
+  init-ios:
+    if: github.event_name == 'workflow_dispatch' && inputs.ios_init
+    runs-on: macos-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies + build store export
+        run: |
+          bun install --frozen-lockfile
+          bun run build:store
+      - name: Ensure CocoaPods
+        run: command -v pod || sudo gem install cocoapods --no-document
+      - name: Generate and commit the iOS shell
+        run: |
+          if [ -d ios ]; then
+            echo "ios/ already exists — nothing to do."
+            exit 0
+          fi
+          bunx cap add ios
+          git config user.name "store-release bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add ios
+          git commit -m "chore: generate iOS Capacitor shell (cap add ios)"
+          git push origin main

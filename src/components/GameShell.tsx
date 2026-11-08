@@ -13,7 +13,7 @@
 // in the cleanup — remounts can never double loops or listeners.
 // ============================================================
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { Volume2, VolumeX } from 'lucide-react'
+import { Pause, Volume2, VolumeX } from 'lucide-react'
 import { GameEngine } from '@/game/core/engine'
 import { InputManager } from '@/game/input'
 import { Renderer } from '@/game/render/renderer'
@@ -114,10 +114,39 @@ const INITIAL_UI: UiSnapshot = {
   stats: null,
 }
 
+/** on-screen pads for touch screens — drive the engine's own public
+ *  API (pressAction / held), so touch and keyboard are one game. */
+interface TouchCtl {
+  press(a: string): void
+  setMove(left: boolean, right: boolean): void
+  sketchActive(): boolean
+}
+
 export default function GameShell() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const engineRef = useRef<GameEngine | null>(null)
+  const touchCtlRef = useRef<TouchCtl | null>(null)
   const [ui, setUi] = useState<UiSnapshot>(INITIAL_UI)
+  const [coarse, setCoarse] = useState(false)
+
+  // touch screens get the corner pads (mouse-primary devices never do,
+  // even if they happen to have a touchscreen) — plus a fallback: the
+  // first REAL finger to touch the screen turns the pads on, which
+  // covers exotic WebViews where (pointer: coarse) lies
+  useEffect(() => {
+    const mq = window.matchMedia('(pointer: coarse)')
+    const upd = () => setCoarse(mq.matches)
+    upd()
+    mq.addEventListener('change', upd)
+    const firstTouch = (e: PointerEvent) => {
+      if (e.pointerType === 'touch') setCoarse(true)
+    }
+    window.addEventListener('pointerdown', firstTouch)
+    return () => {
+      mq.removeEventListener('change', upd)
+      window.removeEventListener('pointerdown', firstTouch)
+    }
+  }, [])
   const best = useSyncExternalStore(subscribeBest, getBestSnapshot, () => null)
   // persist the endless best when a run ends (store write, no setState —
   // the store notification re-renders the score line)
@@ -173,6 +202,16 @@ export default function GameShell() {
       unlock: () => engine.unlockAudio(),
     })
 
+    // expose the same engine API to the touch pads
+    touchCtlRef.current = {
+      press: (a) => engine.pressAction(a),
+      setMove: (l, r) => {
+        held.left = l
+        held.right = r
+      },
+      sketchActive: () => engine.sketchMode,
+    }
+
     // letterbox the fixed 960×600 page into the window, DPR-aware
     const resize = () => {
       const dpr = Math.min(2, window.devicePixelRatio || 1)
@@ -210,6 +249,7 @@ export default function GameShell() {
     return () => {
       cancelAnimationFrame(raf)
       input.destroy()
+      touchCtlRef.current = null
       window.removeEventListener('resize', resize)
       audio.dispose()
       engineRef.current = null
@@ -220,6 +260,38 @@ export default function GameShell() {
     const e = engineRef.current
     if (e) fn(e)
   }
+
+  /** pointer handlers for a hold-button (move pads): capture the pointer
+   *  so sliding off the pad still releases, and every exit path fires up */
+  const hold = (down: () => void, up: () => void) => ({
+    onPointerDown: (ev: React.PointerEvent<HTMLButtonElement>) => {
+      ev.preventDefault()
+      ev.stopPropagation()
+      try {
+        ev.currentTarget.setPointerCapture(ev.pointerId)
+      } catch {
+        /* capture is best-effort — window pointerup still ends it */
+      }
+      down()
+    },
+    onPointerUp: () => up(),
+    onPointerCancel: () => up(),
+    onLostPointerCapture: () => up(),
+  })
+
+  const tap = (fn: () => void) => ({
+    onPointerDown: (ev: React.PointerEvent<HTMLButtonElement>) => {
+      ev.preventDefault()
+      ev.stopPropagation()
+      fn()
+    },
+  })
+
+  const touch = () => touchCtlRef.current
+  const padBtn =
+    'flex select-none touch-none items-center justify-center rounded-full border-2 border-[#2b2620] bg-[#f5ecd9]/85 text-[#2b2620] shadow-[3px_3px_0_rgba(43,38,32,0.7)] active:translate-y-0.5 active:shadow-[1px_1px_0_rgba(43,38,32,0.7)]'
+  const padLabel = { ...HAND, fontSize: 11, letterSpacing: 2 } as const
+  const showPads = coarse && ui.status === 'playing'
 
   const btn =
     'rounded-lg border-2 border-[#2b2620] bg-[#f5ecd9] px-5 py-2 text-[#2b2620] shadow-[3px_3px_0_#2b2620] transition hover:-translate-y-0.5 hover:shadow-[4px_5px_0_#2b2620] active:translate-y-0 active:shadow-[2px_2px_0_#2b2620]'
@@ -245,7 +317,87 @@ export default function GameShell() {
         >
           {ui.muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
         </button>
+        {coarse && (
+          <button
+            tabIndex={-1}
+            {...tap(() => touch()?.press('pause'))}
+            aria-label="Pause"
+            className="absolute -left-3 -top-3 flex h-9 w-9 items-center justify-center rounded-full border-2 border-[#2b2620] bg-[#f5ecd9] text-[#2b2620] shadow"
+          >
+            <Pause size={16} />
+          </button>
+        )}
       </div>
+
+      {/* ---------------- TOUCH PADS (coarse pointers only) ---------------- */}
+      {showPads && (
+        <>
+          {/* portrait phones play better wide — gentle nudge, not a blocker */}
+          <div className="pointer-events-none absolute inset-x-0 top-2 z-10 hidden justify-center portrait:flex">
+            <span
+              style={HAND}
+              className="rounded-full border border-[#2b2620]/40 bg-[#f5ecd9]/90 px-3 py-1 text-xs text-[#2b2620]"
+            >
+              rotate for a wider page
+            </span>
+          </div>
+          <div className="absolute bottom-5 left-4 z-10 flex gap-3">
+            <button
+              aria-label="Move left"
+              className={`${padBtn} h-16 w-16`}
+              {...hold(
+                () => touch()?.setMove(true, false),
+                () => touch()?.setMove(false, false),
+              )}
+            >
+              <span aria-hidden className="text-2xl">
+                ←
+              </span>
+            </button>
+            <button
+              aria-label="Move right"
+              className={`${padBtn} h-16 w-16`}
+              {...hold(
+                () => touch()?.setMove(false, true),
+                () => touch()?.setMove(false, false),
+              )}
+            >
+              <span aria-hidden className="text-2xl">
+                →
+              </span>
+            </button>
+          </div>
+          <div className="absolute bottom-5 right-4 z-10 flex items-end gap-3">
+            <div className="flex flex-col gap-3">
+              <button
+                aria-label="Sketch a plank"
+                className={`${padBtn} h-12 w-12`}
+                {...tap(() => touch()?.press('sketch'))}
+              >
+                <span style={padLabel}>PEN</span>
+              </button>
+              <button
+                aria-label="Keep or place"
+                className={`${padBtn} h-12 w-12`}
+                {...tap(() => {
+                  const t = touch()
+                  if (!t) return
+                  t.press(t.sketchActive() ? 'confirm' : 'pin')
+                })}
+              >
+                <span style={padLabel}>KEEP</span>
+              </button>
+            </div>
+            <button
+              aria-label="Jump"
+              className={`${padBtn} h-20 w-20`}
+              {...tap(() => touch()?.press('jump'))}
+            >
+              <span style={padLabel}>JUMP</span>
+            </button>
+          </div>
+        </>
+      )}
 
       {/* ---------------- TITLE ---------------- */}
       {ui.status === 'title' && (
@@ -284,8 +436,9 @@ export default function GameShell() {
               </p>
             )}
             <p className="mt-5 text-xs opacity-60">
-              ENTER to begin · ←/→ or A/D move · SPACE jump · 1–7 select a rule · ENTER keeps it ·
-              C sketch · sound starts after your first key or click
+              {coarse
+                ? 'drag on the page to draw a plank · tap a rule ring, then KEEP, to pin it · corner pads move & jump · sound starts after your first touch'
+                : 'ENTER to begin · ←/→ or A/D move · SPACE jump · 1–7 select a rule · ENTER keeps it · C sketch · sound starts after your first key or click'}
             </p>
           </div>
         </div>

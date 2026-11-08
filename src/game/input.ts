@@ -1,9 +1,16 @@
 // ============================================================
-// input.ts — keyboard & mouse binding. One place, full cleanup.
+// input.ts — keyboard & pointer binding. One place, full cleanup.
 // ------------------------------------------------------------
 // WHY a class: React must never own game listeners (StrictMode
 // double-mount would duplicate them). The shell constructs one
 // InputManager per engine instance and destroys it in cleanup.
+//
+// v1.4 "storefront": the canvas listens to POINTER events, not
+// mouse events — one code path serves mouse, trackpad, pen and
+// FINGER, so the mobile store builds draw planks with a thumb.
+// Stroke ownership: the first pointer to touch the canvas owns
+// the stroke until it lifts; extra fingers are ignored (and a
+// stray pointerup from a HUD button can't end someone's stroke).
 //
 // Keyboard-first mapping:
 //   ←/→ or A/D move · SPACE jump · 1–7 select token
@@ -57,6 +64,10 @@ export class InputManager {
   private down = false
   private canvas: HTMLCanvasElement
   private cb: InputCallbacks
+  /** pointerId that owns the current sketch stroke (null = none) */
+  private strokeId: number | null = null
+  /** last known canvas-local point — used if a stroke is cancelled */
+  private lastPt: { x: number; y: number } = { x: 0, y: 0 }
 
   constructor(canvas: HTMLCanvasElement, cb: InputCallbacks) {
     this.canvas = canvas
@@ -64,20 +75,23 @@ export class InputManager {
     window.addEventListener('keydown', this.onKeyDown)
     window.addEventListener('keyup', this.onKeyUp)
     window.addEventListener('blur', this.onBlur)
-    window.addEventListener('pointerdown', this.onWindowPointerDown)
-    window.addEventListener('mouseup', this.onMouseUp)
-    canvas.addEventListener('mousemove', this.onMouseMove)
-    canvas.addEventListener('mousedown', this.onMouseDown)
+    window.addEventListener('pointerup', this.onPointerUp)
+    window.addEventListener('pointercancel', this.onPointerCancel)
+    // any pointer anywhere (menus included) unlocks audio
+    window.addEventListener('pointerdown', this.onAnyPointerDown)
+    canvas.addEventListener('pointermove', this.onPointerMove)
+    canvas.addEventListener('pointerdown', this.onCanvasPointerDown)
   }
 
   destroy(): void {
     window.removeEventListener('keydown', this.onKeyDown)
     window.removeEventListener('keyup', this.onKeyUp)
     window.removeEventListener('blur', this.onBlur)
-    window.removeEventListener('pointerdown', this.onWindowPointerDown)
-    window.removeEventListener('mouseup', this.onMouseUp)
-    this.canvas.removeEventListener('mousemove', this.onMouseMove)
-    this.canvas.removeEventListener('mousedown', this.onMouseDown)
+    window.removeEventListener('pointerup', this.onPointerUp)
+    window.removeEventListener('pointercancel', this.onPointerCancel)
+    window.removeEventListener('pointerdown', this.onAnyPointerDown)
+    this.canvas.removeEventListener('pointermove', this.onPointerMove)
+    this.canvas.removeEventListener('pointerdown', this.onCanvasPointerDown)
   }
 
   private push(): void {
@@ -178,7 +192,7 @@ export class InputManager {
     }
   }
 
-  /** map a mouse event to logical 960×600 coordinates */
+  /** map a pointer event to logical 960×600 coordinates */
   private toLocal(e: MouseEvent): { x: number; y: number } {
     const r = this.canvas.getBoundingClientRect()
     return {
@@ -187,27 +201,42 @@ export class InputManager {
     }
   }
 
-  private onMouseMove = (e: MouseEvent): void => {
+  /** hover + stroke movement — forward if free or if this pointer owns the stroke */
+  private onPointerMove = (e: PointerEvent): void => {
+    if (this.strokeId !== null && e.pointerId !== this.strokeId) return
     const p = this.toLocal(e)
+    this.lastPt = p
     this.cb.pointerMove(p.x, p.y)
   }
 
-  private onMouseDown = (e: MouseEvent): void => {
-    if (e.button !== 0) return // sketching is a left-button gesture
+  /** a stroke starts: first pointer claims it, others wait */
+  private onCanvasPointerDown = (e: PointerEvent): void => {
+    if (this.strokeId !== null) return // a stroke is already in progress
+    if (e.pointerType === 'mouse' && e.button !== 0) return // left-button gesture
+    this.strokeId = e.pointerId
     this.cb.unlock()
     const p = this.toLocal(e)
+    this.lastPt = p
     this.cb.pointerDown(p.x, p.y)
   }
 
-  /** release anywhere (even off-canvas) ends the stroke */
-  private onMouseUp = (e: MouseEvent): void => {
-    if (e.button !== 0) return
+  /** release anywhere (even off-canvas) ends the stroke — only its owner */
+  private onPointerUp = (e: PointerEvent): void => {
+    if (this.strokeId === null || e.pointerId !== this.strokeId) return
+    this.strokeId = null
     const p = this.toLocal(e)
     this.cb.pointerUp(p.x, p.y)
   }
 
-  /** any click anywhere (menus included) unlocks audio */
-  private onWindowPointerDown = (): void => {
+  /** system stole the pointer (gesture/notification shade) → end stroke */
+  private onPointerCancel = (e: PointerEvent): void => {
+    if (this.strokeId === null || e.pointerId !== this.strokeId) return
+    this.strokeId = null
+    this.cb.pointerUp(this.lastPt.x, this.lastPt.y)
+  }
+
+  /** any pointerdown anywhere (menus included) unlocks audio */
+  private onAnyPointerDown = (): void => {
     this.cb.unlock()
   }
 

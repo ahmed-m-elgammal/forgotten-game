@@ -1,17 +1,24 @@
 import type { NextConfig } from "next";
 
-// GitHub Pages deploy: STATIC_EXPORT=1 produces a fully static build
-// under /forgotten-game/ (project-page base path), in a SEPARATE dist
-// dir so the running dev server's .next is never touched.
-const isStaticExport = process.env.STATIC_EXPORT === "1";
+// Two static-export flavors, in SEPARATE dist dirs so the running dev
+// server's .next is never touched:
+//   STATIC_EXPORT=1 → GitHub Pages: built under /forgotten-game/ base path
+//   STORE_EXPORT=1  → Capacitor shells (Android/iOS): served from the app
+//                     bundle root, so NO base path. This is the webDir.
+const isPagesExport = process.env.STATIC_EXPORT === "1";
+const isStoreExport = process.env.STORE_EXPORT === "1";
+const isExport = isPagesExport || isStoreExport;
 
 const nextConfig: NextConfig = {
-  output: isStaticExport ? "export" : "standalone",
-  ...(isStaticExport
+  output: isExport ? "export" : "standalone",
+  ...(isExport
     ? {
-        distDir: process.env.NEXT_DIST_DIR || ".next-export",
-        basePath: "/forgotten-game",
-        assetPrefix: "/forgotten-game",
+        distDir: isStoreExport
+          ? ".next-store"
+          : process.env.NEXT_DIST_DIR || ".next-export",
+        ...(isPagesExport
+          ? { basePath: "/forgotten-game", assetPrefix: "/forgotten-game" }
+          : {}),
         images: { unoptimized: true },
       }
     : {}),
