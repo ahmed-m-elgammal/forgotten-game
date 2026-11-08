@@ -1,5 +1,5 @@
 // ============================================================
-// THE GAME THAT FORGOT YOU — shared types & tuning constants
+// THE NOTEBOOK THAT FORGOT YOU — shared types & tuning constants
 // ------------------------------------------------------------
 // WHY this file exists: every module (rules, rooms, observer,
 // engine, renderer, input, shell) speaks this one vocabulary.

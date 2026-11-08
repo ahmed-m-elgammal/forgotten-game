@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "THE GAME THAT FORGOT YOU.",
+  title: "THE NOTEBOOK THAT FORGOT YOU.",
   description:
     "A notebook platformer where the world forgets its own rules — gravity, solidity, the ground, left and right, the leap. Spend your memory to keep what matters and guide a tiny ink scribble to the door marked OUT?.",
 };

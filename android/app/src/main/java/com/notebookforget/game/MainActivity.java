@@ -1,4 +1,4 @@
-package com.ahmedmelgammal.forgottengame;
+package com.notebookforget.game;
 
 import com.getcapacitor.BridgeActivity;
 

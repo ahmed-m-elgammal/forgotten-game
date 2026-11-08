@@ -19,15 +19,15 @@ def releaseKeystorePassword = envOrProp('ANDROID_KEYSTORE_PASSWORD', 'androidKey
 def releaseKeyAlias         = envOrProp('ANDROID_KEY_ALIAS', 'androidKeyAlias')
 def releaseKeyPassword      = envOrProp('ANDROID_KEY_PASSWORD', 'androidKeyPassword')
 def appVersionCode          = (envOrProp('APP_VERSION_CODE', 'versionCode') ?: '1').toInteger()
-def appVersionName          = envOrProp('APP_VERSION_NAME', 'versionName') ?: '1.4.0'
+def appVersionName          = envOrProp('APP_VERSION_NAME', 'versionName') ?: '1.0.0'
 
 def hasKeystore = releaseKeystoreFile != null && file(releaseKeystoreFile).exists()
 
 android {
-    namespace = "com.ahmedmelgammal.forgottengame"
+    namespace = "com.notebookforget.game"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.ahmedmelgammal.forgottengame"
+        applicationId "com.notebookforget.game"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode appVersionCode

@@ -28,8 +28,8 @@ fg = Image.new("RGBA", (S, S), (0, 0, 0, 0))
 fg.paste(art, ((S - safe) // 2, (S - safe) // 2), art)
 fg.save("assets/icon-foreground.png")
 
-# --- square icon: the full-bleed art as-is ---
-src.resize((S, S), Image.LANCZOS).save("assets/icon-only.png")
+# --- square icon: the full-bleed art as-is (RGB: App Store rejects alpha) ---
+src.resize((S, S), Image.LANCZOS).convert("RGB").save("assets/icon-only.png")
 
 # --- splash: blurred paper, icon centered, no text (title screen brands it) ---
 icon_on_splash = int(SP * 0.30)  # ~820px
@@ -52,16 +52,24 @@ try:
     d = ImageDraw.Draw(paper)
     icon_fg = src.resize((340, 340), Image.LANCZOS)
     paper.paste(icon_fg, (FG_W - 340 - 46, (FG_H - 340) // 2), icon_fg)
-    font_path = "/usr/share/fonts/truetype/chinese/NotoSansSC-Bold.ttf"
-    try:
-        f_title = ImageFont.truetype(font_path, 58)
-        f_tag = ImageFont.truetype(font_path, 21)
-    except OSError:
+    # Linux CI font first, then Windows/macOS fallbacks for local runs
+    for font_path in (
+        "/usr/share/fonts/truetype/chinese/NotoSansSC-Bold.ttf",
+        "C:/Windows/Fonts/arialbd.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    ):
+        try:
+            f_title = ImageFont.truetype(font_path, 58)
+            f_tag = ImageFont.truetype(font_path, 21)
+            break
+        except OSError:
+            continue
+    else:
         f_title = ImageFont.load_default()
         f_tag = f_title
     ink = (43, 38, 32)
-    d.text((52, 148), "THE GAME THAT", font=f_title, fill=ink)
-    d.text((52, 214), "FORGOT YOU.", font=f_title, fill=ink)
+    d.text((52, 148), "THE NOTEBOOK", font=f_title, fill=ink)
+    d.text((52, 214), "THAT FORGOT YOU.", font=f_title, fill=ink)
     d.text((54, 312), "the world forgets its rules — you decide what stays.",
            font=f_tag, fill=(87, 66, 35))
     # hand-drawn amber underline flourish

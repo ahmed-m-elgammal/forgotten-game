@@ -5,8 +5,8 @@ import type { CapacitorConfig } from '@capacitor/cli'
 // WebView serves the bundle from its root, unlike the GitHub Pages
 // export which lives under /forgotten-game/).
 const config: CapacitorConfig = {
-  appId: 'com.ahmedmelgammal.forgottengame',
-  appName: 'The Game That Forgot You',
+  appId: 'com.notebookforget.game',
+  appName: 'The Notebook That Forgot You',
   webDir: 'next-store',
   server: {
     // serve the bundle over https-scheme so WebAudio, canvas and

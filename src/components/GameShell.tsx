@@ -307,7 +307,7 @@ export default function GameShell() {
         <canvas
           ref={canvasRef}
           className="block touch-none rounded-sm shadow-[0_10px_40px_rgba(60,45,20,0.35)] ring-1 ring-[#c9b384]"
-          aria-label="THE GAME THAT FORGOT YOU — game canvas"
+          aria-label="THE NOTEBOOK THAT FORGOT YOU — game canvas"
         />
         <button
           tabIndex={-1}
@@ -407,7 +407,7 @@ export default function GameShell() {
               a small notebook fable
             </p>
             <h1 style={HAND} className="mt-2 text-4xl font-bold leading-tight sm:text-5xl">
-              THE GAME THAT FORGOT YOU.
+              THE NOTEBOOK THAT FORGOT YOU.
             </h1>
             <p className="mt-4 opacity-80">
               The world forgets its rules — gravity, solidity, the ground itself. You have a

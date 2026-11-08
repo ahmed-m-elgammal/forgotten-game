@@ -1,4 +1,4 @@
-# THE GAME THAT FORGOT YOU.
+# THE NOTEBOOK THAT FORGOT YOU.
 
 A notebook platformer where you never control the hero — you control what the
 world *remembers*. A small ink scribble runs and jumps through hand-drawn
@@ -10,7 +10,9 @@ way across.
 Everything is procedural — paper grain, boiling ink lines, the sounds. No
 sprites, no audio files. The whole campaign is data.
 
-**Play: https://ahmed-m-elgammal.github.io/forgotten-game/ — or run it locally (below).**
+**Play: https://ahmed-m-elgammal.github.io/forgotten-game/ - or run it locally (below).**
+
+**Launch docs:** [STORE-LAUNCH.md](STORE-LAUNCH.md) - [STORE-INTEGRATIONS-PLAN.md](STORE-INTEGRATIONS-PLAN.md) - [MONETIZATION.md](MONETIZATION.md)
 
 ---
 
@@ -171,6 +173,8 @@ STATIC_EXPORT=1 NEXT_DIST_DIR=.next-export bunx next build
 ```
 
 ## Version history
+
+> Store releases restart at **v1.0.0**; the versions below are the web history.
 
 - **v1.2.0 — the margins.** Endless mode: generated pages forever,
   bookmarks as lives, deepest-page score with a local best; headless
