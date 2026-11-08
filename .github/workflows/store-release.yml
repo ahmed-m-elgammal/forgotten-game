@@ -12,10 +12,12 @@
 #              secrets exist; otherwise an unsigned archive
 #
 # One-time helpers (Actions tab → store-release → Run workflow):
-#   ☐ make-keystore — generates your Android upload keystore and
-#     hands it back as an artifact (base64 it into repo secrets)
-#   ☐ ios-init — runs `cap add ios` on macOS and commits the
+#   ☐ ios-init - runs `cap add ios` on macOS and commits the
 #     ios/ project, so iOS settings persist between releases
+#
+# NEVER generate signing keys in Actions. This repo is public, so
+# run summaries and artifacts are world-readable. Create the Android
+# upload keystore locally with keytool (see STORE-LAUNCH.md).
 #
 # Required repository secrets (see STORE-LAUNCH.md):
 #   ANDROID_KEYSTORE_B64, ANDROID_KEYSTORE_PASSWORD,
@@ -34,10 +36,6 @@ on:
         description: 'Release version for manual runs (e.g. 1.0.0)'
         type: string
         default: '1.0.0'
-      make_keystore:
-        description: 'One-time: generate the Android upload keystore'
-        type: boolean
-        default: false
       ios_init:
         description: 'One-time: create & commit the ios/ project'
         type: boolean
@@ -53,7 +51,7 @@ concurrency:
 jobs:
   # ---------------------------------------------------------- web
   web:
-    if: github.event_name == 'push' || (!inputs.make_keystore && !inputs.ios_init)
+    if: github.event_name == 'push' || !inputs.ios_init
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -242,31 +240,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # --------------------- one-time helpers (manual dispatch only) --
-  keystore:
-    if: github.event_name == 'workflow_dispatch' && inputs.make_keystore
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-      - name: Generate upload keystore
-        run: |
-          PASS="$(openssl rand -hex 16)"
-          keytool -genkeypair -v -keystore upload-keystore.jks -alias upload \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass "$PASS" -keypass "$PASS" \
-            -dname "CN=The Notebook That Forgot You, OU=Games, O=ahmed-m-elgammal"
-          echo "### Keystore password used: \`$PASS\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "Store it as ANDROID_KEYSTORE_PASSWORD **and** ANDROID_KEY_PASSWORD secrets, then DELETE this run's logs." >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: upload-keystore
-          path: upload-keystore.jks
-          retention-days: 7
-
+  # --------------------- one-time helper (manual dispatch only) ---
   init-ios:
     if: github.event_name == 'workflow_dispatch' && inputs.ios_init
     runs-on: macos-latest

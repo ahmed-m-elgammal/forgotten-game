@@ -42,26 +42,57 @@ these days), Apple second (certificates add a manual hour).
 
 ## 2. Android — Google Play (step by step)
 
-### 2.1 One-time: create your upload keystore
-The keystore IS your app's identity — if it's lost, the app can never be updated.
-Never commit it. Easiest path (no local Java needed):
+### 2.1 One-time: create your upload keystore (local)
+The keystore IS your app's identity - if it's lost, the app can never be updated.
+Never commit it, and **never generate it in GitHub Actions**: this repo is
+public, so Actions artifacts and run summaries are world-readable.
 
-1. GitHub repo → **Actions** → **store-release** → **Run workflow**
-2. Tick **“generate the Android upload keystore”** → Run
-3. Download the `upload-keystore` **artifact** → `upload-keystore.jks`
-4. The run summary shows the password used. **Save both** somewhere safe
-   (password manager), then **delete that workflow run** so the password
-   isn't in the logs.
+Use `keytool` (ships with Java 21) on your own machine. Windows PowerShell:
+
+```powershell
+keytool -genkeypair -v -keystore "$HOME\notebookforget-upload.jks" -alias upload `
+  -keyalg RSA -keysize 2048 -validity 10000 -storetype JKS
+```
+
+macOS / Linux:
+
+```bash
+keytool -genkeypair -v -keystore ~/notebookforget-upload.jks -alias upload \
+  -keyalg RSA -keysize 2048 -validity 10000 -storetype JKS
+```
+
+Enter a strong password (use the same one for the key when asked) and fill in
+the name/organization prompts. **Back up the `.jks` and the password** in a
+password manager or offline drive - losing either blocks all future updates.
 
 ### 2.2 One-time: add repo secrets
 Repo → Settings → Secrets and variables → Actions → New repository secret:
 
 | Secret | Value |
 | --- | --- |
-| `ANDROID_KEYSTORE_B64` | `base64 -w0 upload-keystore.jks` (mac: `base64 -i upload-keystore.jks`) |
+| `ANDROID_KEYSTORE_B64` | base64 of the `.jks` (commands below) |
 | `ANDROID_KEYSTORE_PASSWORD` | the keystore password from step 2.1 |
 | `ANDROID_KEY_ALIAS` | `upload` |
-| `ANDROID_KEY_PASSWORD` | same password |
+| `ANDROID_KEY_PASSWORD` | same password as the keystore |
+
+Windows PowerShell:
+
+```powershell
+$b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes("$HOME\notebookforget-upload.jks"))
+$b64 | gh secret set ANDROID_KEYSTORE_B64
+gh secret set ANDROID_KEYSTORE_PASSWORD   # paste the password when prompted
+gh secret set ANDROID_KEY_ALIAS --body upload
+gh secret set ANDROID_KEY_PASSWORD        # paste the same password
+```
+
+macOS / Linux:
+
+```bash
+base64 -w0 ~/notebookforget-upload.jks | gh secret set ANDROID_KEYSTORE_B64
+gh secret set ANDROID_KEYSTORE_PASSWORD
+gh secret set ANDROID_KEY_ALIAS --body upload
+gh secret set ANDROID_KEY_PASSWORD
+```
 
 ### 2.3 Every release
 The first store release is **1.0.0** (the old `v1.0.0` tag belongs to the web

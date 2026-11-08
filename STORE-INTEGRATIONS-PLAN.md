@@ -1489,7 +1489,8 @@ codesign -d --entitlements :- \
 
 ### 9.4 One-time setup order
 
-1. Generate the Android keystore via the workflow; save the `.jks` and password.
+1. Generate the Android upload keystore locally with `keytool` (never in GitHub
+   Actions - this repo is public); back up the `.jks` and password.
 2. Add the Android secrets.
 3. Create the Play app record and upload an AAB to Internal testing.
 4. Create the Apple app record, App ID, distribution certificate/profile.
