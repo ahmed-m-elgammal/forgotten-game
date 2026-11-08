@@ -92,6 +92,8 @@ jobs:
           else
             echo "### No ANDROID_KEYSTORE_B64 secret — building UNSIGNED release (smoke test only)." >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Make gradlew executable (git exec bit is not always preserved)
+        run: chmod +x android/gradlew
       - name: Sync web assets into the Android shell
         run: bunx cap sync android
       - name: Build release AAB + APK
@@ -176,7 +178,7 @@ jobs:
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Release \
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Release \
             -destination 'generic/platform=iOS' -archivePath build/App.xcarchive archive \
             CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" CODE_SIGN_IDENTITY="Apple Distribution"
@@ -198,7 +200,7 @@ jobs:
       - name: Archive (unsigned fallback)
         if: env.SIGNED != '1'
         run: |
-          xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Release \
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Release \
             -destination 'generic/platform=iOS' -archivePath build/App-unsigned.xcarchive archive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
           cd build && zip -qry App-unsigned.xcarchive.zip App-unsigned.xcarchive
