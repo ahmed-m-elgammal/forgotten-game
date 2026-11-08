@@ -17,6 +17,7 @@ export class AudioEngine {
   private muted = sessionMuted
   private waver: { stop: () => void } | null = null
   private sketchLoop: { stop: () => void } | null = null
+  private ambient: { stop: () => void } | null = null
 
   // ---- lifecycle ---------------------------------------------------
   /** Call on ANY user gesture (keydown / pointerdown). */
@@ -59,6 +60,7 @@ export class AudioEngine {
   dispose(): void {
     this.stopWaver()
     this.stopSketchLoop()
+    this.stopAmbient()
     const c = this.ctx
     this.ctx = null
     this.master = null
@@ -185,10 +187,16 @@ export class AudioEngine {
     this.tone({ f: 659.25, at: (this.ctx?.currentTime ?? 0) + 0.09, dur: 0.38, g: 0.28 })
   }
 
-  /** a rule is forgotten — paper tear + falling pitch */
+  /** a rule is forgotten — paper tear + falling pitch + the ache:
+   *  a quiet semitone drop (B → Bb) underneath, v1.3's musical
+   *  stinger for loss. It should hurt a LITTLE, not announce. */
   forgetPaper(): void {
-    this.hiss({ dur: 0.3, g: 0.5, type: 'bandpass', f: 1600, f1: 300, q: 0.7 })
+    if (!this.ok()) return
+    const t0 = (this.ctx as AudioContext).currentTime
+    this.hiss({ at: t0, dur: 0.3, g: 0.5, type: 'bandpass', f: 1600, f1: 300, q: 0.7 })
     this.tone({ f: 260, f1: 70, type: 'sawtooth', dur: 0.28, g: 0.2, filter: 1200 })
+    this.tone({ f: 246.94, at: t0 + 0.05, dur: 0.5, g: 0.09, attack: 0.03 })
+    this.tone({ f: 233.08, at: t0 + 0.27, dur: 0.7, g: 0.08, attack: 0.04 })
   }
 
   /** auto-restore / remembered — noise sweep up + soft note */
@@ -203,14 +211,24 @@ export class AudioEngine {
     this.tone({ f: 1760, dur: 0.5, g: 0.1, attack: 0.004 })
   }
 
-  /** room clear — four-note arpeggio */
+  /** room clear — four-note arpeggio over a page rustle (v1.3:
+   *  the paper sound makes the arpeggio a page event, not a UI blip) */
   roomClear(): void {
     if (!this.ctx) return
     const t = this.ctx.currentTime
+    this.pageRustle()
     const notes = [392, 494, 587.33, 783.99]
     notes.forEach((f, i) => {
       this.tone({ f, at: t + i * 0.11, dur: 0.3, g: 0.26 })
     })
+  }
+
+  /** a page of paper slides — used by page turns (v1.3) */
+  pageRustle(): void {
+    if (!this.ok()) return
+    const t0 = (this.ctx as AudioContext).currentTime
+    this.hiss({ at: t0, dur: 0.42, g: 0.16, type: 'bandpass', f: 700, f1: 1600, q: 0.8 })
+    this.hiss({ at: t0 + 0.12, dur: 0.3, g: 0.1, type: 'bandpass', f: 1000, f1: 1900, q: 1 })
   }
 
   /** the Observer speaks — low soft hum with beating vibrato */
@@ -219,7 +237,9 @@ export class AudioEngine {
     this.tone({ f: 111, dur: 1.0, g: 0.2, attack: 0.2 })
   }
 
-  /** victory — gentle five-note motif over a low pad */
+  /** victory — the ending theme (v1.3: a full phrase, not a blip):
+   *  the five-note rising motif, an answering phrase, and a warm
+   *  resolving chord over a low pad. ~4.5s, one-shot. */
   victory(): void {
     if (!this.ctx) return
     const t = this.ctx.currentTime
@@ -227,7 +247,17 @@ export class AudioEngine {
     notes.forEach((f, i) => {
       this.tone({ f, at: t + i * 0.17, dur: 0.5, g: 0.26 })
     })
-    this.tone({ f: 130.81, dur: 1.7, g: 0.14, attack: 0.3 })
+    // answering phrase — the story exhales
+    const answer = [783.99, 880, 783.99, 659.25]
+    answer.forEach((f, i) => {
+      this.tone({ f, at: t + 1.05 + i * 0.19, dur: 0.42, g: 0.2 })
+    })
+    // warm resolve: C-major spread + the low pad underneath
+    ;[523.25, 659.25, 783.99].forEach((f) => {
+      this.tone({ f, at: t + 1.9, dur: 1.7, g: 0.14, attack: 0.06 })
+    })
+    this.tone({ f: 130.81, dur: 3.4, g: 0.15, attack: 0.4 })
+    this.tone({ f: 196, dur: 3.0, g: 0.08, attack: 0.5 })
   }
 
   /** endless run over — the notebook closes: three soft falling
@@ -387,6 +417,73 @@ export class AudioEngine {
         // nodes already stopped — fine
       }
       this.sketchLoop = null
+    }
+  }
+
+  // ---- room-tone ambience (v1.3) ---------------------------------------
+  /** a barely-there pad under play: C2+G2 triangles through a low
+   *  filter with a slow breathing LFO — the sound of a quiet room
+   *  where a notebook is thinking. Fades in over ~2.5s. */
+  startAmbient(): void {
+    if (!this.ok() || this.ambient) return
+    const ctx = this.ctx as AudioContext
+    const t0 = ctx.currentTime
+    const g = ctx.createGain()
+    g.gain.setValueAtTime(0.0001, t0)
+    g.gain.linearRampToValueAtTime(0.05, t0 + 2.5)
+    const fl = ctx.createBiquadFilter()
+    fl.type = 'lowpass'
+    fl.frequency.value = 240
+    const o1 = ctx.createOscillator()
+    o1.type = 'triangle'
+    o1.frequency.value = 65.41 // C2
+    const o2 = ctx.createOscillator()
+    o2.type = 'triangle'
+    o2.frequency.value = 98.0 // G2
+    const o3 = ctx.createOscillator()
+    o3.type = 'sine'
+    o3.frequency.value = 130.81 // C3, quiet — the shape under the shape
+    const g3 = ctx.createGain()
+    g3.gain.value = 0.35
+    // slow breathing on the whole bed
+    const lfo = ctx.createOscillator()
+    lfo.frequency.value = 0.07
+    const lfoG = ctx.createGain()
+    lfoG.gain.value = 0.014
+    lfo.connect(lfoG)
+    lfoG.connect(g.gain)
+    o1.connect(fl)
+    o2.connect(fl)
+    o3.connect(g3)
+    g3.connect(fl)
+    fl.connect(g)
+    g.connect(this.master as GainNode)
+    o1.start(t0)
+    o2.start(t0)
+    o3.start(t0)
+    lfo.start(t0)
+    this.ambient = {
+      stop: () => {
+        const t = ctx.currentTime
+        g.gain.cancelScheduledValues(t)
+        g.gain.setValueAtTime(Math.max(0.0001, g.gain.value), t)
+        g.gain.linearRampToValueAtTime(0.0001, t + 0.6)
+        o1.stop(t + 0.7)
+        o2.stop(t + 0.7)
+        o3.stop(t + 0.7)
+        lfo.stop(t + 0.7)
+      },
+    }
+  }
+
+  stopAmbient(): void {
+    if (this.ambient) {
+      try {
+        this.ambient.stop()
+      } catch {
+        // nodes already stopped — fine
+      }
+      this.ambient = null
     }
   }
 

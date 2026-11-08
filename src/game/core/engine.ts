@@ -324,6 +324,7 @@ export class GameEngine implements EngineLike {
   startRun(): void {
     this.audio.unlock()
     this.audio.resume()
+    this.audio.startAmbient()
     this.mode = 'campaign'
     this.resetRunStats()
     this.roomIndex = 0
@@ -337,6 +338,7 @@ export class GameEngine implements EngineLike {
   startEndless(): void {
     this.audio.unlock()
     this.audio.resume()
+    this.audio.startAmbient()
     this.mode = 'endless'
     this.resetRunStats()
     this.endlessDepth = 1
@@ -386,6 +388,7 @@ export class GameEngine implements EngineLike {
 
   quitToTitle(): void {
     this.mode = 'campaign'
+    this.audio.stopAmbient()
     this.loadRoom(0)
     this.notes = []
     this.bigNote = null
@@ -473,12 +476,15 @@ export class GameEngine implements EngineLike {
     return { x, y: 54 }
   }
 
-  pointerMove(x: number, y: number): void {
+  /** wx/wy: pointer in WORLD space (the camera may be zoomed); x/y
+   *  stay SCREEN space for the HUD tokens. Defaults keep old callers
+   *  working when the page is unzoomed. */
+  pointerMove(x: number, y: number, wx = x, wy = y): void {
     this.hoverToken = this.tokenAt(x, y)
-    if (this.drag) this.sketchDragMove(x, y) // feed the live stroke
+    if (this.drag) this.sketchDragMove(wx, wy) // feed the live stroke
   }
 
-  pointerDown(x: number, y: number): void {
+  pointerDown(x: number, y: number, wx = x, wy = y): void {
     if (this.status !== 'playing') return
     const i = this.tokenAt(x, y)
     if (i >= 0) {
@@ -487,11 +493,11 @@ export class GameEngine implements EngineLike {
       else this.selectedIdx = i
       return
     }
-    this.sketchDragStart(x, y)
+    this.sketchDragStart(wx, wy)
   }
 
-  pointerUp(x: number, y: number): void {
-    this.sketchDragEnd(x, y)
+  pointerUp(x: number, y: number, wx = x, wy = y): void {
+    this.sketchDragEnd(wx, wy)
   }
 
   // ================================================================
@@ -1409,6 +1415,7 @@ export class GameEngine implements EngineLike {
         drawn: this.stats.planksDrawn,
         pins: this.stats.totalPins,
       })
+      this.audio.stopAmbient() // let the ending theme sit clean
       this.audio.victory()
       this.bumpUi()
     }
@@ -1421,6 +1428,7 @@ export class GameEngine implements EngineLike {
     this.status = 'gameover'
     this.audio.stopWaver()
     this.audio.stopSketchLoop()
+    this.audio.stopAmbient()
     this.sketchMode = false
     this.drag = null
     this.audio.gameOver()

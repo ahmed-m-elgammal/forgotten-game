@@ -145,9 +145,21 @@ export default function GameShell() {
     renderer.init()
     const input = new InputManager(canvas, {
       action: (a) => engine.pressAction(a),
-      pointerMove: (x, y) => engine.pointerMove(x, y),
-      pointerDown: (x, y) => engine.pointerDown(x, y),
-      pointerUp: (x, y) => engine.pointerUp(x, y),
+      // pointer coords → world coords through the v1.3 camera, so
+      // sketching lands exactly under the cursor even while the
+      // page is zoomed into a warning
+      pointerMove: (x, y) => {
+        const w = renderer.toWorld(engine, x, y)
+        engine.pointerMove(x, y, w.x, w.y)
+      },
+      pointerDown: (x, y) => {
+        const w = renderer.toWorld(engine, x, y)
+        engine.pointerDown(x, y, w.x, w.y)
+      },
+      pointerUp: (x, y) => {
+        const w = renderer.toWorld(engine, x, y)
+        engine.pointerUp(x, y, w.x, w.y)
+      },
       blur: () => engine.onBlur(),
       setHeld: (l, r) => {
         held.left = l

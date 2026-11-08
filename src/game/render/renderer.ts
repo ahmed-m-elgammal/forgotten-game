@@ -6,11 +6,17 @@
 // Art direction: warm paper, boiling ink lines, absence shown
 // as eraser smudges / scribbles / dashed ghosts, and AMBER as
 // the single "about to be forgotten" warning color.
+// v1.3 "ink & sound": a camera (warning zoom, landing kick,
+// hand drift), a particle layer (crumbs / ink / dust / splats),
+// the Observer's pen drawn live, and erasure that leaves a
+// ghost. The renderer DIFFS state between frames to spawn
+// effects — still strictly a reader.
 // ============================================================
 import type { GameEngine } from '../core/engine'
-import type { PlankRT, PlatformRT, RuleId } from '../core/types'
+import type { GameStatus, PlankRT, PlatformRT, RuleId } from '../core/types'
 import { INK_COLORS, INK_MAX, TOKEN_R, VIEW_H, VIEW_W } from '../core/types'
 import { RULES } from '../core/rules'
+import { FxLayer } from './fx'
 import {
   AMBER,
   GRAPHITE,
@@ -61,6 +67,23 @@ function smudges(ctx: CanvasRenderingContext2D, p: PlatformRT, time: number): vo
 
 export class Renderer {
   private grain: HTMLCanvasElement | null = null
+  private fx = new FxLayer()
+
+  // ---- frame-to-frame diff state (spawns fx, drives the camera) ------
+  private lastTime = 0
+  private lastStatus: GameStatus = 'title'
+  private lastRoomDef: unknown = null
+  private prevRulePhase = new Map<RuleId, string>()
+  private prevLand = 0
+  private prevGrounded = false
+  private seenPlanks = new Set<string>()
+  private seenUncircled = new Set<string>()
+
+  // ---- camera state (v1.3) --------------------------------------------
+  private camScale = 1
+  private camKick = 0
+  private camPivot = { x: VIEW_W / 2, y: VIEW_H / 2 }
+  private camApplied = { s: 1, px: VIEW_W / 2, py: VIEW_H / 2 }
 
   /** build the pre-rendered grain tile (client only) */
   init(): void {
@@ -69,7 +92,26 @@ export class Renderer {
     }
   }
 
+  /** the slow hand-holding-the-notebook drift (matches the camera) */
+  private drift(time: number): { x: number; y: number } {
+    if (reducedMotion()) return { x: 0, y: 0 }
+    return { x: Math.sin(time * 0.16) * 2.2, y: Math.cos(time * 0.13) * 1.8 }
+  }
+
+  /** inverse of the applied camera — pointer coords → world coords,
+   *  so sketching stays truthful while the page is zoomed. */
+  toWorld(eng: GameEngine, x: number, y: number): { x: number; y: number } {
+    const { s, px, py } = this.camApplied
+    const d = this.drift(eng.time)
+    return { x: (x - px - d.x) / s + px, y: (y - py - d.y) / s + py }
+  }
+
   draw(ctx: CanvasRenderingContext2D, eng: GameEngine): void {
+    const dt = Math.max(0, Math.min(0.05, eng.time - this.lastTime))
+    this.lastTime = eng.time
+    this.diffState(eng)
+    this.fx.update(dt)
+
     ctx.save()
     // restrained screen shake — rule changes and respawns only
     if (eng.shakeT > 0 && eng.shakeDur > 0 && !reducedMotion()) {
@@ -78,7 +120,34 @@ export class Renderer {
       ctx.translate((Math.random() * 2 - 1) * a, (Math.random() * 2 - 1) * a)
     }
 
-    this.paper(ctx, eng)
+    // ---- camera (v1.3): lean in during warnings, kick on landings,
+    // drift like a hand holding the notebook. Zoom is always ≥ 1
+    // around an interior pivot, so the page never shows gaps.
+    const rm = reducedMotion()
+    let anyWarned = false
+    for (const rt of eng.rules.values()) {
+      if (rt.phase === 'warned') {
+        anyWarned = true
+        break
+      }
+    }
+    const targetScale = anyWarned && !rm ? 1.055 : 1
+    this.camScale += (targetScale - this.camScale) * Math.min(1, dt * 3.2)
+    this.camKick *= Math.max(0, 1 - dt * 7)
+    const pcx = Math.max(60, Math.min(VIEW_W - 60, eng.player.x + eng.player.w / 2))
+    const pcy = Math.max(60, Math.min(VIEW_H - 60, eng.player.y + eng.player.h / 2))
+    const ease = Math.min(1, dt * 4)
+    this.camPivot.x += (pcx - this.camPivot.x) * ease
+    this.camPivot.y += (pcy - this.camPivot.y) * ease
+    const s = this.camScale + this.camKick
+    this.camApplied = { s, px: this.camPivot.x, py: this.camPivot.y }
+    const d = this.drift(eng.time)
+    if (Math.abs(s - 1) > 0.0005 || d.x !== 0 || d.y !== 0) {
+      ctx.translate(this.camPivot.x, this.camPivot.y)
+      ctx.scale(s, s)
+      ctx.translate(-this.camPivot.x, -this.camPivot.y)
+      ctx.translate(d.x, d.y)
+    }
 
     // which platforms are currently telegraphed (warned)
     const warnMap = new Map<string, RuleId>()
@@ -88,6 +157,8 @@ export class Renderer {
       }
     }
 
+    this.paper(ctx, eng)
+    this.fx.drawGhosts(ctx, eng.time) // ghosts of just-forgotten things, under everything
     this.exitDoor(ctx, eng)
     this.platforms(ctx, eng, warnMap)
     this.inkBottles(ctx, eng)
@@ -99,28 +170,128 @@ export class Renderer {
     this.player(ctx, eng)
     this.sketchOverlay(ctx, eng)
     this.ambients(ctx, eng)
+    this.fx.drawParticles(ctx, eng.time)
+    this.fx.drawNibs(ctx, eng.time)
+    ctx.restore() // end camera
+
     this.tokens(ctx, eng)
     this.hud(ctx, eng)
     this.notes(ctx, eng)
     this.vignette(ctx, eng)
     this.transitions(ctx, eng)
     this.hintBar(ctx, eng)
-    ctx.restore()
+  }
+
+  // ---- state diffs → fx spawns (visual only) -------------------------
+  private diffState(eng: GameEngine): void {
+    const st = eng.status
+
+    // a fresh page is blank paper again: drop every transient
+    if (eng.roomDef !== this.lastRoomDef) {
+      this.fx.clear()
+      this.seenPlanks.clear()
+      this.seenUncircled.clear()
+      this.prevRulePhase.clear()
+      for (const [id, rt] of eng.rules) this.prevRulePhase.set(id, rt.phase)
+      for (const pl of eng.planks) {
+        this.seenPlanks.add(pl.id)
+        if (pl.uncircled) this.seenUncircled.add(pl.id)
+      }
+      this.lastRoomDef = eng.roomDef
+      this.lastStatus = st
+      return
+    }
+
+    // rules: warned → forgotten sheds crumbs + leaves a ghost;
+    // forgotten → stable settles a small dust puff.
+    for (const [id, rt] of eng.rules) {
+      const prev = this.prevRulePhase.get(id) ?? rt.phase
+      if (prev === 'warned' && rt.phase === 'forgotten') {
+        if (rt.targets.length > 0) {
+          for (const tid of rt.targets) {
+            const p = eng.platformById(tid)
+            if (!p) continue
+            this.fx.spawnCrumbs(p.x, p.y, p.w, p.h)
+            this.fx.spawnGhost(p.x, p.y, p.w, p.h)
+          }
+        } else if (id === 'naming') {
+          // the name comes off the door — crumbs where the tag sat
+          const e = eng.exitRect
+          this.fx.spawnCrumbs(e.x + e.w / 2 - 28, e.y - 30, 56, 20, 8)
+          this.fx.spawnGhost(e.x + e.w / 2 - 28, e.y - 30, 56, 20, 1.1)
+          this.fx.spawnPuff(eng.player.x + eng.player.w / 2, eng.player.y + eng.player.h / 2, 6)
+        } else {
+          // a rule with no body (gravity / jump / grip / direction):
+          // the page itself sheds a little around you
+          this.fx.spawnPuff(eng.player.x + eng.player.w / 2, eng.player.y + eng.player.h / 2, 9)
+        }
+      } else if (prev === 'forgotten' && rt.phase === 'stable') {
+        this.fx.spawnDust(eng.player.x + eng.player.w / 2, eng.player.y + eng.player.h, 5)
+      }
+      this.prevRulePhase.set(id, rt.phase)
+    }
+
+    // planks: a fresh line settles tiny drops along it; a newly
+    // uncircled plank summons the Observer's pen
+    if (st === 'playing') {
+      for (const pl of eng.planks) {
+        if (!this.seenPlanks.has(pl.id)) {
+          const wet = INK_COLORS[pl.color].body
+          const n = pl.w > 140 ? 4 : 3
+          for (let i = 0; i < n; i++) {
+            this.fx.spawnDrops(pl.x + (pl.w * (i + 1)) / (n + 1), pl.y + pl.h / 2, wet, 1, 0.45)
+          }
+        }
+        if (pl.uncircled && !this.seenUncircled.has(pl.id)) {
+          this.fx.spawnNib(pl.x + pl.w / 2, pl.y + pl.h / 2, pl.w, pl.h)
+        }
+        this.seenPlanks.add(pl.id)
+        if (pl.uncircled) this.seenUncircled.add(pl.id)
+      }
+    }
+
+    // landings: dust at the feet + a camera kick (impact-sized)
+    const p = eng.player
+    if (p.landTimer > 0 && this.prevLand <= 0 && st === 'playing') {
+      if (!reducedMotion()) this.camKick = Math.min(0.032, p.prevVy / 16000)
+      this.fx.spawnDust(p.x + p.w / 2, p.y + p.h, p.prevVy > 700 ? 9 : 5)
+    }
+    this.prevLand = p.landTimer
+
+    // jumps & springs kick up a fleck of ink
+    if (!p.grounded && this.prevGrounded && p.vy < -180 && st === 'playing') {
+      this.fx.spawnDrops(p.x + p.w / 2, p.y + p.h, INK, 2, 0.8)
+    }
+    this.prevGrounded = p.grounded
+
+    // status transitions: the margin takes you (splat), the anchor
+    // takes you back (dust at the respawn point)
+    if (st === 'dead' && this.lastStatus !== 'dead') {
+      const sx = Math.max(10, Math.min(VIEW_W - 10, p.x + p.w / 2))
+      const sy = Math.min(VIEW_H - 4, p.y + p.h)
+      this.fx.spawnSplat(sx, sy)
+    }
+    if (st === 'playing' && this.lastStatus === 'dead') {
+      this.fx.spawnDust(p.x + p.w / 2, p.y + p.h, 7)
+    }
+    this.lastStatus = st
   }
 
   // ---- paper, ruled lines, margin ------------------------------------
+  // drawn slightly oversized: the camera's hand-drift must never
+  // reveal a sliver of unpapered void at the edges
   private paper(ctx: CanvasRenderingContext2D, eng: GameEngine): void {
     ctx.fillStyle = PAPER
-    ctx.fillRect(0, 0, VIEW_W, VIEW_H)
+    ctx.fillRect(-12, -12, VIEW_W + 24, VIEW_H + 24)
     // slow drifting grain
     if (this.grain) {
       const g = this.grain
       const t = eng.time * 3
       ctx.globalAlpha = 0.5
-      const ox = -(t % g.width)
-      const oy = -((t * 0.6) % g.height)
-      for (let x = ox; x < VIEW_W; x += g.width) {
-        for (let y = oy; y < VIEW_H; y += g.height) {
+      const ox = -(t % g.width) - 12
+      const oy = -((t * 0.6) % g.height) - 12
+      for (let x = ox; x < VIEW_W + 12; x += g.width) {
+        for (let y = oy; y < VIEW_H + 12; y += g.height) {
           ctx.drawImage(g, x, y)
         }
       }
@@ -129,22 +300,22 @@ export class Renderer {
     // very subtle ruled-line hint
     ctx.strokeStyle = 'rgba(43,38,32,0.05)'
     ctx.lineWidth = 1
-    for (let y = 64; y < VIEW_H; y += 34) {
+    for (let y = 64; y < VIEW_H + 12; y += 34) {
       ctx.beginPath()
-      ctx.moveTo(0, y)
-      ctx.lineTo(VIEW_W, y)
+      ctx.moveTo(-12, y)
+      ctx.lineTo(VIEW_W + 12, y)
       ctx.stroke()
     }
     // the notebook margin (double line, left edge)
     ctx.strokeStyle = 'rgba(178,73,44,0.25)'
     ctx.beginPath()
-    ctx.moveTo(22, 0)
-    ctx.lineTo(22, VIEW_H)
+    ctx.moveTo(22, -12)
+    ctx.lineTo(22, VIEW_H + 12)
     ctx.stroke()
     ctx.strokeStyle = 'rgba(178,73,44,0.12)'
     ctx.beginPath()
-    ctx.moveTo(26, 0)
-    ctx.lineTo(26, VIEW_H)
+    ctx.moveTo(26, -12)
+    ctx.lineTo(26, VIEW_H + 12)
     ctx.stroke()
   }
 
@@ -559,6 +730,10 @@ export class Renderer {
     } else if (!p.grounded && p.vy < -140) {
       sy = 1.16
       sx = 0.88
+    } else if (!p.grounded && p.vy > 300) {
+      // falling stretch — reaching for the ground
+      sy = 1.09
+      sx = 0.94
     } else if (p.grounded && Math.abs(p.vx) < 10) {
       sy = 1 + Math.sin(time * 2.6) * 0.02
     }
@@ -587,15 +762,26 @@ export class Renderer {
     ctx.arc(p.facing * 1.2, -25, 7.2, 0, Math.PI * 2)
     ctx.fill()
     ctx.stroke()
-    // dot eyes, looking where it walks
+    // dot eyes, looking where it walks and where it falls — and
+    // every few seconds it blinks (a living little line)
     ctx.fillStyle = INK
     const ex = p.facing * 1.2 + p.facing * 0.8
-    ctx.beginPath()
-    ctx.arc(ex - 2.2, -26, 1.1, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.beginPath()
-    ctx.arc(ex + 2.2, -26, 1.1, 0, Math.PI * 2)
-    ctx.fill()
+    const lookY = p.grounded ? 0 : Math.max(-1.3, Math.min(1.5, p.vy / 420))
+    const blinkCycle = (time * 1000) % 3400
+    const blinking = blinkCycle < 110
+    if (blinking) {
+      ctx.lineWidth = 1
+      wobblyLine(ctx, ex - 3.2, -26 + lookY, ex - 1.2, -26 + lookY, seed + 12, time, 0.2)
+      wobblyLine(ctx, ex + 1.2, -26 + lookY, ex + 3.2, -26 + lookY, seed + 13, time, 0.2)
+      ctx.lineWidth = 2.4
+    } else {
+      ctx.beginPath()
+      ctx.arc(ex - 2.2, -26 + lookY, 1.1, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.beginPath()
+      ctx.arc(ex + 2.2, -26 + lookY, 1.1, 0, Math.PI * 2)
+      ctx.fill()
+    }
     ctx.restore()
   }
 
@@ -1009,12 +1195,21 @@ export class Renderer {
   }
 
   // ---- page transitions ---------------------------------------------------------------
+  // v1.3: the sweep is now a PAGE — a full sheet with a curled
+  // leading edge and a cast shadow, sliding across and revealing
+  // the fresh page underneath, like a leaf being turned.
   private transitions(ctx: CanvasRenderingContext2D, eng: GameEngine): void {
     const time = eng.time
     if (eng.status === 'dead') {
       // a page lifts from the right and sweeps across
       const k = Math.min(1, eng.transitionT / eng.transitionDur)
       const foldX = VIEW_W + 120 - (VIEW_W + 240) * easeInOut(k)
+      // cast shadow ahead of the fold (light falls from the right)
+      const sh = ctx.createLinearGradient(foldX - 30, 0, foldX, 0)
+      sh.addColorStop(0, 'rgba(60,45,20,0)')
+      sh.addColorStop(1, 'rgba(60,45,20,0.12)')
+      ctx.fillStyle = sh
+      ctx.fillRect(foldX - 30, 0, 30, VIEW_H)
       ctx.fillStyle = 'rgba(245,236,217,0.97)'
       ctx.beginPath()
       ctx.moveTo(foldX, 0)
@@ -1023,6 +1218,12 @@ export class Renderer {
       ctx.lineTo(foldX, VIEW_H)
       ctx.closePath()
       ctx.fill()
+      // the page catches light: subtle vertical shading on the sheet
+      const lg = ctx.createLinearGradient(0, 0, 0, VIEW_H)
+      lg.addColorStop(0, 'rgba(255,255,255,0.10)')
+      lg.addColorStop(1, 'rgba(120,95,50,0.05)')
+      ctx.fillStyle = lg
+      ctx.fillRect(foldX, 0, VIEW_W - foldX, VIEW_H)
       ctx.strokeStyle = 'rgba(43,38,32,0.5)'
       ctx.lineWidth = 2
       ctx.beginPath()
@@ -1038,25 +1239,55 @@ export class Renderer {
         rot: -0.03,
       })
     } else if (eng.status === 'roomclear') {
-      const k = eng.transitionT / eng.transitionDur
-      if (k < 0.5) {
-        // covering sweep from the left
-        const cov = easeInOut(k / 0.5) * VIEW_W
-        ctx.fillStyle = 'rgba(245,236,217,0.97)'
-        ctx.fillRect(0, 0, cov, VIEW_H)
-        ctx.strokeStyle = 'rgba(43,38,32,0.45)'
-        ctx.lineWidth = 2
-        ctx.beginPath()
-        ctx.moveTo(cov, 0)
-        ctx.lineTo(cov, VIEW_H)
-        ctx.stroke()
-        handText(ctx, 'page turned.', cov / 2, 300, 24, { align: 'center', alpha: 0.8, seed: 141, time })
-      } else {
-        // revealing the fresh page
-        const rev = easeInOut((k - 0.5) / 0.5) * VIEW_W
-        ctx.fillStyle = 'rgba(245,236,217,0.97)'
-        ctx.fillRect(rev, 0, VIEW_W - rev, VIEW_H)
-      }
+      // one continuous sheet: its left (leading) edge travels from
+      // off-right to off-left; first half covers the old page, second
+      // half reveals the fresh one sliding out behind it
+      const k = Math.max(0, Math.min(1, eng.transitionT / eng.transitionDur))
+      const leadX = VIEW_W + 40 - (2 * VIEW_W + 80) * easeInOut(k)
+      const sx = leadX
+      // cast shadow on whatever the page is about to cover / just left
+      const sh = ctx.createLinearGradient(sx - 34, 0, sx, 0)
+      sh.addColorStop(0, 'rgba(60,45,20,0)')
+      sh.addColorStop(1, 'rgba(60,45,20,0.13)')
+      ctx.fillStyle = sh
+      ctx.fillRect(sx - 34, 0, 34, VIEW_H)
+      // the sheet itself (the turning page)
+      ctx.fillStyle = 'rgba(246,238,222,0.985)'
+      ctx.fillRect(sx, 0, VIEW_W, VIEW_H)
+      // curvature shading along the leading edge + soft light on top
+      const curl = ctx.createLinearGradient(sx, 0, sx + 44, 0)
+      curl.addColorStop(0, 'rgba(120,95,50,0.14)')
+      curl.addColorStop(0.4, 'rgba(255,255,255,0.09)')
+      curl.addColorStop(1, 'rgba(255,255,255,0)')
+      ctx.fillStyle = curl
+      ctx.fillRect(sx, 0, 44, VIEW_H)
+      const lg = ctx.createLinearGradient(0, 0, 0, VIEW_H)
+      lg.addColorStop(0, 'rgba(255,255,255,0.08)')
+      lg.addColorStop(1, 'rgba(120,95,50,0.04)')
+      ctx.fillStyle = lg
+      ctx.fillRect(Math.max(0, sx), 0, Math.min(VIEW_W, sx + VIEW_W) - Math.max(0, sx), VIEW_H)
+      // curled leading edge: a bulge past the sheet line
+      ctx.fillStyle = '#faf3e3'
+      ctx.beginPath()
+      ctx.moveTo(sx, 0)
+      ctx.quadraticCurveTo(sx - 16, VIEW_H / 2, sx, VIEW_H)
+      ctx.lineTo(sx, VIEW_H)
+      ctx.closePath()
+      ctx.fill()
+      ctx.strokeStyle = 'rgba(43,38,32,0.45)'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(sx, 0)
+      ctx.quadraticCurveTo(sx - 16, VIEW_H / 2, sx, VIEW_H)
+      ctx.stroke()
+      // the words ride the sheet's center
+      const ta = Math.sin(Math.PI * k)
+      handText(ctx, 'page turned.', sx + VIEW_W / 2, 300, 24, {
+        align: 'center',
+        alpha: 0.85 * ta,
+        seed: 141,
+        time,
+      })
     }
   }
 

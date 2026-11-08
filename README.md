@@ -80,6 +80,31 @@ A headless auditor (`bun scripts/verify-endless.ts`) generates hundreds of
 pages and re-checks every one against the fairness contract, then
 smoke-runs the whole state machine — 7,600+ assertions, zero canvas.
 
+## Ink & Sound (v1.3: the page feels alive)
+
+A presentation pass — zero new assets, everything still procedural:
+
+- **Forgetting is now erasure.** When a rule lets go, its platforms shed
+  eraser crumbs and leave a dashed ghost that fades; the name comes off
+  the door in a puff. Restoring settles a little paper dust.
+- **The hero lives.** It blinks every few seconds, its eyes follow falls
+  and rises, it stretches when falling, and jumps kick up flecks of ink.
+  Falling into the margin ends in an ink splat at the page's edge.
+- **A camera.** The page leans in slightly while a rule is fading, kicks
+  on hard landings, and drifts like a hand holding the notebook. Sketch
+  coordinates are un-projected through the camera, so drawing stays
+  exactly under the cursor even while zoomed. Honors
+  `prefers-reduced-motion`.
+- **The Observer's pen is visible.** When it uncircles your plank you see
+  the graphite nib trace the circle live, shedding pencil dust, before
+  the strike lands.
+- **Pages turn like pages.** Room transitions are a full sheet with a
+  curled leading edge, curvature shading and a cast shadow sliding over
+  the old page (and the death flip gains the same treatment).
+- **The notebook has a voice.** A barely-there room-tone pad under play,
+  a paper rustle under page turns, a quiet semitone "ache" when a rule is
+  forgotten, and a full ending theme on victory.
+
 ## Controls
 
 ```
@@ -119,6 +144,7 @@ src/game/core/    engine.ts (simulation + fairness contract)
                   observer.ts (habit tracking, bias, endings)
                   types.ts  (shared vocabulary + all tuning constants)
 src/game/render/  renderer.ts (draws engine state, never mutates it)
+                  fx.ts      (particles, ghosts, the Observer's pen)
                   paper.ts   (grain, line boil, handwriting primitives)
 src/game/audio/   synth.ts   (100% synthesized SFX, lazy AudioContext)
 src/game/input.ts keyboard/mouse bindings, StrictMode-safe
