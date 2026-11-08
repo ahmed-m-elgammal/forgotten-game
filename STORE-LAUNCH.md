@@ -116,12 +116,15 @@ The workflow runs → download the Android artifact → you get
 3. **Store listing**: paste the copy from §4 below, upload `feature-graphic.png`
    + 2–8 phone screenshots (see §5).
 4. **Content rating → IARC questionnaire**: puzzle game, no violence beyond
-   cartoon ink, no sharing, no purchases, no ads → expected rating *Everyone /
-   PEGI 3*.
+   cartoon ink, no user-generated content, one-time in-app purchase, no ads →
+   expected rating *Everyone / PEGI 3*.
 5. **App content**: privacy policy URL =
-   `https://ahmed-m-elgammal.github.io/forgotten-game/privacy.html`
-   Data safety form: **No data collected, no data shared** (true — the game
-   keeps the best score in on-device localStorage only).
+   `https://ahmed-m-elgammal.github.io/forgotten-game/privacy.html`.
+   **Data safety is not “no data”**: declare *Purchase history* and
+   *Device or other IDs* collected (not shared, encrypted in transit) by
+   RevenueCat for app functionality — validating and restoring the one-time
+   full-notebook unlock. No account, no ads, no analytics, no location.
+   Give the privacy-policy contact as the deletion-request route.
 6. When the closed test has its testers and 14 days are done → **Promote to
    production**. Reviews usually clear within a day for small puzzle games.
 
@@ -190,10 +193,16 @@ API-key secrets it leaves the signed `.ipa` as an artifact.
    yourself as an *Internal* tester and install via the TestFlight app
    (~15 min after processing). No Mac or Transporter needed.
 3. **App Store tab**: screenshots (§5), description (§4), privacy policy URL,
-   App Privacy → *Data Not Collected*, content age rating questionnaire,
-   export compliance → uses standard encryption only (HTTPS) → exempt.
-4. Submit for review. Notebook games with no data collection review cleanly;
-   typical 24–48 h.
+   App Privacy → **not** *Data Not Collected*. Declare *Purchases → Purchase
+   History* and *Identifiers → User ID / Device ID*, used for app functionality
+   (RevenueCat entitlement validation and restore), not used for tracking.
+   Content age rating questionnaire, export compliance → standard encryption
+   only (HTTPS) → exempt.
+4. In-App Purchases: create the non-consumable
+   `com.notebookforget.game.full_notebook` at the planned price and attach it
+   to the RevenueCat offering before submitting.
+5. Submit for review. Mention “Restore Purchase” in the review notes; typical
+   24–48 h.
 
 ---
 
@@ -229,14 +238,15 @@ API-key secrets it leaves the signed `.ipa` as an artifact.
 > • **THE MARGINS** — an endless notebook that writes new pages forever.
 >   How deep can you make it before the ink gives out?
 >
-> No accounts. No ads. No data collected. Just you, a paper clip, and a
-> notebook that is trying to forget you.
+> No accounts. No ads. No tracking. The first three pages are free; one
+> purchase unlocks the rest. Just you, a paper clip, and a notebook that is
+> trying to forget you.
 >
 > “a small notebook fable”
 
 **Category**: Games → Puzzle (Play: also add *Adventure* as secondary if offered).
 **Content rating answer guide**: cartoon-level “violence” only (ink figure gets
-erased), no user interaction, no purchases, no ads → *Everyone / 4+*.
+erased), no user interaction, one-time in-app purchase, no ads → *Everyone / 4+*.
 
 ---
 

@@ -49,7 +49,7 @@ Skip Play Games, skip Game Center, skip ads. Those can be 1.1 and 1.2.
 | Android release | Signed AAB/APK pipeline exists, keystore not generated yet |
 | iOS release | Unsigned archive path exists; signing/TestFlight is manual-signing ready |
 | Store assets | Icon, Play icon, feature graphic |
-| Privacy policy | Public URL exists, but it currently claims **no data collection and no purchases** |
+| Privacy policy | Public URL updated for IAP + RevenueCat (2026-11-08) |
 
 ### Missing
 

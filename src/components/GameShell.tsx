@@ -21,6 +21,9 @@ import { AudioEngine } from '@/game/audio/synth'
 import { RULES } from '@/game/core/rules'
 import type { RuleId, UiSnapshot } from '@/game/core/types'
 import { VIEW_H, VIEW_W } from '@/game/core/types'
+import { useBilling } from '@/native/useBilling'
+import Paywall from '@/components/Paywall'
+import type { PaywallReason } from '@/components/Paywall'
 
 const HAND = { fontFamily: '"Comic Sans MS","Segoe Print","Chalkboard SE",cursive,sans-serif' }
 
@@ -128,6 +131,7 @@ export default function GameShell() {
   const touchCtlRef = useRef<TouchCtl | null>(null)
   const [ui, setUi] = useState<UiSnapshot>(INITIAL_UI)
   const [coarse, setCoarse] = useState(false)
+  const [paywallReason, setPaywallReason] = useState<PaywallReason | null>(null)
 
   // touch screens get the corner pads (mouse-primary devices never do,
   // even if they happen to have a touchscreen) — plus a fallback: the
@@ -256,9 +260,34 @@ export default function GameShell() {
     }
   }, [])
 
-  const act = (fn: (e: GameEngine) => void) => () => {
+  // after the engine effect on purpose: the hook's mount effect can then
+  // read the cached unlock and set campaignLimit on a live engine
+  const billing = useBilling(engineRef)
+
+  const withEngine = (fn: (e: GameEngine) => void) => {
     const e = engineRef.current
     if (e) fn(e)
+  }
+
+  const act = (fn: (e: GameEngine) => void) => () => withEngine(fn)
+
+  const openPaywall = (reason: PaywallReason) => {
+    billing.clearMessages()
+    void billing.refreshPrice()
+    setPaywallReason(reason)
+  }
+  const startEndless = () => {
+    if (!billing.unlocked) {
+      openPaywall('endless')
+      return
+    }
+    withEngine((e) => e.startEndless())
+  }
+  const demoEnd = ui.status === 'victory' && !billing.unlocked
+  const closePaywall = () => {
+    if (demoEnd) withEngine((e) => e.quitToTitle())
+    setPaywallReason(null)
+    billing.clearMessages()
   }
 
   /** pointer handlers for a hold-button (move pads): capture the pointer
@@ -422,14 +451,45 @@ export default function GameShell() {
                 style={HAND}
                 className={btn}
                 tabIndex={-1}
-                onClick={act((e) => e.startEndless())}
+                onClick={startEndless}
               >
                 The margins (endless)
               </button>
+              {billing.native && !billing.unlocked && (
+                <button
+                  style={HAND}
+                  className={btn}
+                  tabIndex={-1}
+                  onClick={() => openPaywall('title')}
+                >
+                  Unlock the full notebook{billing.price ? ` - ${billing.price}` : ''}
+                </button>
+              )}
               <button style={HAND} className={btn} tabIndex={-1} onClick={act((e) => e.toggleLegend())}>
                 What do the tokens mean?
               </button>
             </div>
+            {billing.native && !billing.unlocked && (
+              <div className="mt-3 text-sm">
+                <button
+                  type="button"
+                  className="underline underline-offset-4 opacity-60 disabled:opacity-30"
+                  disabled={billing.busy !== null}
+                  onClick={billing.restore}
+                >
+                  {billing.busy === 'restore' ? 'looking for your purchase…' : 'Restore purchase'}
+                </button>
+                {(billing.error || billing.notice) && (
+                  <p
+                    role="status"
+                    aria-live="polite"
+                    className={`mt-2 text-xs ${billing.error ? 'text-[#a33a2a]' : 'text-[#39628f]'}`}
+                  >
+                    {billing.error ?? billing.notice}
+                  </p>
+                )}
+              </div>
+            )}
             {best && (
               <p style={HAND} className="mt-4 text-sm opacity-70">
                 the notebook&apos;s best: page {best.pages}
@@ -474,7 +534,7 @@ export default function GameShell() {
       )}
 
       {/* ---------------- VICTORY ---------------- */}
-      {ui.status === 'victory' && ui.ending && (
+      {ui.status === 'victory' && ui.ending && billing.unlocked && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#f5ecd9]/95 p-4">
           <div className="max-h-full w-full max-w-2xl overflow-y-auto rounded-xl border-2 border-[#2b2620] bg-[#f5ecd9] p-6 text-center text-[#2b2620] shadow-[5px_6px_0_rgba(43,38,32,0.6)] sm:p-8">
             <p style={HAND} className="text-sm opacity-60">
@@ -536,7 +596,7 @@ export default function GameShell() {
                 style={HAND}
                 className={btn}
                 tabIndex={-1}
-                onClick={act((e) => e.startEndless())}
+                onClick={startEndless}
               >
                 Keep writing (endless)
               </button>
@@ -597,7 +657,7 @@ export default function GameShell() {
             )}
 
             <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
-              <button style={HAND} className={btn} tabIndex={-1} onClick={act((e) => e.startEndless())}>
+              <button style={HAND} className={btn} tabIndex={-1} onClick={startEndless}>
                 Write again
               </button>
               <button style={HAND} className={btn} tabIndex={-1} onClick={act((e) => e.quitToTitle())}>
@@ -716,6 +776,21 @@ export default function GameShell() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ---------------- DEMO END / PAYWALL ---------------- */}
+      {(demoEnd || paywallReason) && (
+        <Paywall
+          native={billing.native}
+          reason={demoEnd ? 'demo' : (paywallReason as PaywallReason)}
+          price={billing.price}
+          busy={billing.busy}
+          error={billing.error}
+          notice={billing.notice}
+          onBuy={billing.buy}
+          onRestore={billing.restore}
+          onClose={closePaywall}
+        />
       )}
     </main>
   )

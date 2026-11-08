@@ -131,6 +131,8 @@ export class GameEngine implements EngineLike {
   rules = new Map<RuleId, RuleRuntime>()
   activeOrder: RuleId[] = [] // token order = selection order
   roomIndex = 0
+  /** pages playable this run: 3 in the demo, 8 after the unlock */
+  campaignLimit = 3
   roomDef: RoomDef = ROOMS[0]
   exitRect: Rect = { x: 0, y: 0, w: 0, h: 0 }
   checkpoint = { x: 0, y: 0, active: false, activatedAt: -1 }
@@ -265,7 +267,7 @@ export class GameEngine implements EngineLike {
       status: this.status,
       mode: this.mode,
       roomIndex: this.roomIndex,
-      roomCount: this.mode === 'endless' ? this.roomIndex + 1 : ROOMS.length,
+      roomCount: this.mode === 'endless' ? this.roomIndex + 1 : Math.min(this.campaignLimit, ROOMS.length),
       roomName: this.roomDef.name,
       roomSubtitle: this.roomDef.subtitle,
       bookmarks: this.bookmarks,
@@ -1405,7 +1407,7 @@ export class GameEngine implements EngineLike {
       this.bumpUi()
       return
     }
-    if (this.roomIndex + 1 < ROOMS.length) {
+    if (this.roomIndex + 1 < Math.min(this.campaignLimit, ROOMS.length)) {
       this.roomIndex++
       this.loadRoom(this.roomIndex)
       this.bumpUi()
@@ -1419,6 +1421,21 @@ export class GameEngine implements EngineLike {
       this.audio.victory()
       this.bumpUi()
     }
+  }
+
+  /** purchase/restore from the demo cliffhanger: turn the next page
+   *  instead of replaying pages 1-3. */
+  continueCampaign(): void {
+    if (this.status !== 'victory') return
+    if (this.roomIndex + 1 >= ROOMS.length) return
+    this.roomIndex++
+    this.loadRoom(this.roomIndex)
+    this.ending = null
+    this.status = 'playing'
+    this.audio.unlock()
+    this.audio.resume()
+    this.audio.startAmbient()
+    this.bumpUi()
   }
 
   /** endless run over: the score screen reads everything from the
