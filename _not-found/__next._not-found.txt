@@ -1,4 +1,4 @@
 1:"$Sreact.fragment"
 2:I[30127,["/forgotten-game/_next/static/chunks/806b2e51c429f2bf.js","/forgotten-game/_next/static/chunks/dc415a212a43a7d1.js","/forgotten-game/_next/static/chunks/dc245ae8ed249c7a.js"],"default"]
 3:I[59196,["/forgotten-game/_next/static/chunks/806b2e51c429f2bf.js","/forgotten-game/_next/static/chunks/dc415a212a43a7d1.js","/forgotten-game/_next/static/chunks/dc245ae8ed249c7a.js"],"default"]
-0:{"buildId":"jbBJR3IzHLrPKzudER-oZ","rsc":["$","$1","c",{"children":[null,["$","$L2",null,{"parallelRouterKey":"children","template":["$","$L3",null,{}]}]]}],"loading":null,"isPartial":false}
+0:{"buildId":"Tv93zhYr6rCQL9rx7CNXd","rsc":["$","$1","c",{"children":[null,["$","$L2",null,{"parallelRouterKey":"children","template":["$","$L3",null,{}]}]]}],"loading":null,"isPartial":false}
