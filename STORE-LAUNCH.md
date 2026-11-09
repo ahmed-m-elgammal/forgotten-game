@@ -14,7 +14,7 @@ your part is accounts, secrets, and pressing the upload buttons.
 | Mobile polish | `src/app/layout.tsx` | No pinch-zoom, notch-safe, paper-colored status bar |
 | Capacitor shell | `capacitor.config.ts`, `android/` | Native wrapper — same Canvas engine, ~100% code reuse |
 | Store export flavor | `next.config.ts` (`STORE_EXPORT=1`), `npm run build:store` | Static build **without** the GitHub Pages base path |
-| Icons & splash | `assets/`, applied into `android/…/res` | Adaptive launcher icons + light/dark splash (regenerate: `python3 scripts/make-store-assets.py && bunx @capacitor/assets generate --android`) |
+| Icons & splash | `assets/`, applied into `android/…/res` and `ios/…/Assets.xcassets` | Adaptive launcher icons + light/dark splash for both stores (regenerate: `python3 scripts/make-store-assets.py && bunx @capacitor/assets generate --android --ios`) |
 | CI pipeline | `.github/workflows/store-release.yml` | On every `v*` tag: builds signed Android `.aab`/`.apk` + uploads iOS to TestFlight |
 | Privacy policy | `public/privacy.html` | Required store URL: `https://ahmed-m-elgammal.github.io/forgotten-game/privacy.html` |
 
@@ -133,10 +133,8 @@ The workflow runs → download the Android artifact → you get
 ## 3. iOS — App Store (step by step)
 
 ### 3.1 One-time: commit the iOS shell
-Needs macOS only for 10 minutes — done **by CI**:
-Actions → **store-release** → Run workflow → tick **“create & commit the
-ios/ project”**. The workflow runs `cap add ios` on a macOS runner and pushes
-`ios/` back to `main`. From then on, releases reuse the committed project.
+**Done.** `ios/` is committed, and `cap sync ios` includes RevenueCat in
+`ios/App/CapApp-SPM/Package.swift`. Future releases reuse the committed project.
 
 ### 3.2 One-time: distribution certificate + App Store profile (Windows works)
 No Mac needed — OpenSSL (bundled with Git for Windows) makes the CSR:
@@ -175,9 +173,10 @@ Keep the `.p12`, profile and password backed up — they expire yearly.
 | `ASC_ISSUER_ID` | API Issuer ID |
 | `ASC_KEY_P8_B64` | base64 of `AuthKey_….p8` |
 
-The API key is **only** used for the TestFlight upload; signing uses the
-certificate/profile. Xcode never auto-creates certificates, so CI cannot burn
-through Apple's certificate limit.
+The CI build uses the API key **only** for the TestFlight upload; signing uses
+the certificate/profile. RevenueCat separately needs an App Store Connect key
+so it can sync the product and validate/restore the IAP. Xcode never
+auto-creates certificates, so CI cannot burn through Apple's certificate limit.
 
 ### 3.4 Every release
 Same as Android — push a `v*` tag, or run the workflow manually with the
@@ -270,9 +269,10 @@ endless mode. Capture from a local dev build instead:
 
 - **Play**: min 2 phone screenshots, landscape 16:9 (1920×1080 is ideal),
   ≥ 320 px, ≤ 3840 px.
-- **Apple**: 6.7″ landscape **2796×1290** (required); App Store Connect shows
-  the exact size it wants — the game is designed for landscape, so keep it
-  landscape. iPad 12.9″ **2732×2048** only if you enable iPad.
+- **Apple**: 6.7″ landscape **2796×1290** (required) and iPad 13″ landscape
+  **2752×2064** (the project targets iPhone + iPad; 12.9″ 2732×2048 is also
+  accepted). App Store Connect shows the exact sizes — the game is designed
+  for landscape, so keep them landscape.
 
 Frame them on the paper background (the game IS the aesthetic — no marketing
 framing needed).
@@ -281,8 +281,10 @@ framing needed).
 
 ## 6. Release flow from now on
 
-First store release: **Actions → store-release → Run workflow → version
-`1.0.0`**.
+First store release: after adding the signing secrets (§3.3), use
+**Actions → store-release → Run workflow → version `1.0.0`**. A dry run without
+signing secrets already passes and produces a signed Android AAB/APK plus an
+unsigned iOS archive.
 
 For later releases:
 1. Pick the next version (e.g. `1.0.1`) and bump `package.json` to match.
