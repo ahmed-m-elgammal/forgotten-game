@@ -252,19 +252,27 @@ erased), no user interaction, one-time in-app purchase, no ads → *Everyone / 4
 
 ## 5. Screenshots
 
-Take from the **deployed site** in a desktop browser at mobile sizes
-(DevTools → device toolbar), while playing:
-1. Title page (paper texture + the hero)
-2. A mid-game moment with an amber rule warning (the money shot — eraser
-   effect visible)
-3. Finger-drawing a plank over a gap (shows touch play)
-4. THE MARGINS endless mode with the Observer's pencil circles
+The deployed Pages build is the 3-page demo, so it cannot show pages 4–8 or
+endless mode. Capture from a local dev build instead:
+
+1. Run `bun dev`, open `http://localhost:3000` in Chrome DevTools device mode
+   at a landscape phone size (e.g. 932×430, or 2796×1290 for the App Store set).
+2. In the console, open the full campaign for this dev session:
+   `window.__forgotEngine.campaignLimit = 8`, then
+   `window.__forgotEngine.startRun()`. Jump straight to page 4 with
+   `window.__forgotEngine.roomIndex = 3; window.__forgotEngine.loadRoom(3)`.
+   The `__forgotEngine` hook exists only in `bun dev`, never in store builds.
+3. Capture:
+   - Title page (paper texture + the hero)
+   - Page 4/5 with an amber rule warning (the money shot — eraser effect visible)
+   - Finger-drawing a plank over a gap (turn on touch emulation)
+   - `window.__forgotEngine.debugStartEndless(4)` for THE MARGINS
 
 - **Play**: min 2 phone screenshots, landscape 16:9 (1920×1080 is ideal),
   ≥ 320 px, ≤ 3840 px.
 - **Apple**: 6.7″ landscape **2796×1290** (required); App Store Connect shows
-  the exact size it wants — the game is landscape-locked, so keep it landscape.
-  iPad 12.9″ **2732×2048** only if you enable iPad.
+  the exact size it wants — the game is designed for landscape, so keep it
+  landscape. iPad 12.9″ **2732×2048** only if you enable iPad.
 
 Frame them on the paper background (the game IS the aesthetic — no marketing
 framing needed).
