@@ -101,8 +101,17 @@ export default function Paywall({
     >
       <div
         ref={panelRef}
-        className="max-h-full w-full max-w-lg overflow-y-auto rounded-xl border-2 border-[#2b2620] bg-[#f5ecd9] p-6 text-center text-[#2b2620] shadow-[5px_6px_0_rgba(43,38,32,0.6)] sm:p-8"
+        className="relative max-h-full w-full max-w-lg overflow-y-auto rounded-xl border-2 border-[#2b2620] bg-[#f5ecd9] p-6 text-center text-[#2b2620] shadow-[5px_6px_0_rgba(43,38,32,0.6)] sm:p-8"
       >
+        <button
+          type="button"
+          aria-label="Close"
+          className="absolute right-3 top-2 rounded-md px-2 text-2xl leading-none opacity-50 hover:opacity-100 disabled:opacity-20"
+          disabled={busy !== null}
+          onClick={onClose}
+        >
+          ×
+        </button>
         <p style={HAND} className="text-xs uppercase tracking-[0.2em] opacity-60">
           {copy.eyebrow}
         </p>
